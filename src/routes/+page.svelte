@@ -1,10 +1,37 @@
 <script>
+    import { tick, onMount } from 'svelte';
     import { messages, isLoading, selectedModel, addMessage } from '$lib/store.js';
-    import { sendChat } from '$lib/api.js';
-    import { tick } from 'svelte';
+    import { sendChat, getSetupStatus, clearHistory } from '$lib/api.js';
+    import AccountPanel from '$lib/AccountPanel.svelte';
+    import SetupScreen from '$lib/SetupScreen.svelte';
+    import { marked } from 'marked';
 
     let input = '';
     let chatContainer;
+    let activeView = 'chat';
+    let setupReady = false;
+    let checkingSetup = true;
+
+    onMount(async () => {
+        try {
+            const status = await getSetupStatus();
+            setupReady = status.ready;
+        } catch (e) {
+            // Backend not up yet — show setup screen
+            setupReady = false;
+        } finally {
+            checkingSetup = false;
+        }
+    });
+
+    function onSetupReady() {
+        setupReady = true;
+    }
+
+    async function handleClearHistory() {
+        await clearHistory($selectedModel);
+        $messages = [];
+    }
 
     async function handleSubmit() {
         if (!input.trim() || $isLoading) return;
@@ -44,11 +71,19 @@
     }
 </script>
 
+{#if checkingSetup}
+    <div class="splash">
+        <p>Starting FreeHive...</p>
+    </div>
+{:else if !setupReady}
+    <SetupScreen on:ready={onSetupReady} />
+{:else}
+
 <div class="app">
     <aside class="sidebar">
         <div class="sidebar-header">
             <h1>FreeHive</h1>
-            <span class="version">v0.1.0</span>
+            <span class="version">v0.2.0</span>
         </div>
 
         <div class="model-section">
@@ -59,68 +94,124 @@
                     on:click={() => $selectedModel = 'claude'}>
                     <span class="dot green"></span> Claude
                 </button>
-                <button class="model-btn disabled" disabled>
-                    <span class="dot gray"></span> ChatGPT
-                    <span class="soon">soon</span>
+                <button
+                    class="model-btn {$selectedModel === 'chatgpt' ? 'active' : ''}"
+                    on:click={() => $selectedModel = 'chatgpt'}>
+                    <span class="dot green"></span> ChatGPT
                 </button>
                 <button class="model-btn disabled" disabled>
                     <span class="dot gray"></span> Gemini
                     <span class="soon">soon</span>
+                </button>
+                <button
+                    class="model-btn new-chat-btn"
+                    on:click={handleClearHistory}
+                    title="Start a new conversation">
+                    + New Chat
+                </button>
+            </div>
+        </div>
+
+        <div class="model-section">
+            <p class="section-label">Views</p>
+            <div class="model-list">
+                <button
+                    class="model-btn {activeView === 'chat' ? 'active' : ''}"
+                    on:click={() => activeView = 'chat'}>
+                    💬 Chat
+                </button>
+                <button
+                    class="model-btn {activeView === 'accounts' ? 'active' : ''}"
+                    on:click={() => activeView = 'accounts'}>
+                    🔑 Accounts
                 </button>
             </div>
         </div>
     </aside>
 
     <main class="chat-area">
-        <div class="chat-header">
-            <span class="active-model">{$selectedModel}</span>
-            <span class="status-dot"></span>
-            <span class="status-text">connected</span>
-        </div>
 
-        <div class="messages" bind:this={chatContainer}>
-            {#if $messages.length === 0}
-                <div class="empty-state">
-                    <p>FreeHive is running.</p>
-                    <p class="sub">Send a message to start.</p>
-                </div>
-            {/if}
+        {#if activeView === 'chat'}
+            <div class="chat-header">
+                <span class="active-model">{$selectedModel}</span>
+                <span class="status-dot"></span>
+                <span class="status-text">connected</span>
+            </div>
 
-            {#each $messages as msg (msg.id)}
-                <div class="message {msg.role}">
-                    <div class="bubble">
-                        <p>{msg.content}</p>
+            <div class="messages" bind:this={chatContainer}>
+                {#if $messages.length === 0}
+                    <div class="empty-state">
+                        <p>FreeHive is running.</p>
+                        <p class="sub">Send a message to start.</p>
                     </div>
-                    <span class="meta">{msg.role === 'assistant' ? msg.model : 'you'} · {msg.timestamp}</span>
-                </div>
-            {/each}
+                {/if}
 
-            {#if $isLoading}
-                <div class="message assistant">
-                    <div class="bubble loading">
-                        <span></span><span></span><span></span>
+                {#each $messages as msg (msg.id)}
+                    <div class="message {msg.role}">
+                      <div class="bubble">
+                          {#if msg.role === 'assistant'}
+                              {@html marked(msg.content)}
+                          {:else}
+                              {msg.content}
+                          {/if}
+                      </div>
+                        <span class="meta">{msg.role === 'assistant' ? msg.model : 'you'} · {msg.timestamp}</span>
                     </div>
-                </div>
-            {/if}
-        </div>
+                {/each}
 
-        <div class="input-area">
-            <textarea
-                bind:value={input}
-                on:keydown={handleKeydown}
-                placeholder="Message {$selectedModel}... (Enter to send)"
-                rows="1"
-                disabled={$isLoading}
-            ></textarea>
-            <button on:click={handleSubmit} disabled={$isLoading || !input.trim()}>
-                Send
-            </button>
-        </div>
+                {#if $isLoading}
+                    <div class="message assistant">
+                        <div class="bubble loading">
+                            <span></span><span></span><span></span>
+                        </div>
+                    </div>
+                {/if}
+            </div>
+
+            <div class="input-area">
+                <textarea
+                    bind:value={input}
+                    on:keydown={handleKeydown}
+                    placeholder="Message {$selectedModel}... (Enter to send)"
+                    rows="1"
+                    disabled={$isLoading}
+                ></textarea>
+                <button on:click={handleSubmit} disabled={$isLoading || !input.trim()}>
+                    Send
+                </button>
+            </div>
+
+        {:else if activeView === 'accounts'}
+            <div class="chat-header">
+                <span class="active-model">Account Manager</span>
+            </div>
+            <AccountPanel />
+        {/if}
+
     </main>
 </div>
 
+{/if}
+
 <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    .splash {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        background: #0f0f0f;
+        color: #333;
+        font-size: 13px;
+    }
+
+    .new-chat-btn {
+        font-size: 12px;
+        color: #444;
+        margin-top: 4px;
+    }
+    .new-chat-btn:hover { color: #888 !important; }
 
     .app {
         display: flex;
@@ -268,13 +359,41 @@
     .message.user { align-self: flex-end; align-items: flex-end; }
     .message.assistant { align-self: flex-start; align-items: flex-start; }
 
-    .bubble {
-        padding: 10px 14px;
-        border-radius: 12px;
-        font-size: 14px;
-        line-height: 1.6;
-        white-space: pre-wrap;
-        word-break: break-word;
+    .bubble :global(p) { margin-bottom: 0.6em; }
+    .bubble :global(p:last-child) { margin-bottom: 0; }
+    .bubble :global(pre) {
+        background: #0d0d0d;
+        border: 1px solid #2a2a2a;
+        border-radius: 6px;
+        padding: 12px;
+        overflow-x: auto;
+        margin: 8px 0;
+    }
+    .bubble :global(code) {
+        font-family: monospace;
+        font-size: 13px;
+        background: #0d0d0d;
+        padding: 2px 5px;
+        border-radius: 3px;
+    }
+    .bubble :global(pre code) {
+        background: none;
+        padding: 0;
+    }
+    .bubble :global(ul), .bubble :global(ol) {
+        padding-left: 20px;
+        margin: 6px 0;
+    }
+    .bubble :global(li) { margin-bottom: 3px; }
+    .bubble :global(h1), .bubble :global(h2), .bubble :global(h3) {
+        margin: 10px 0 6px;
+        color: #fff;
+    }
+    .bubble :global(blockquote) {
+        border-left: 3px solid #333;
+        padding-left: 12px;
+        color: #888;
+        margin: 6px 0;
     }
 
     .message.user .bubble {
