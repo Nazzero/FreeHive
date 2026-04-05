@@ -12,7 +12,12 @@ export async function getModels() {
     return res.data.models;
 }
 
-export async function compareModels(models, message) {
-    const res = await axios.post(`${BASE_URL}/compare`, { models, message });
-    return res.data.results;
+export async function clearHistory(model = null) {
+    const params = model ? `?model=${model}` : '';
+    await axios.post(`${BASE_URL}/chat/clear${params}`);
+}
+
+export async function getSetupStatus() {
+    const res = await axios.get(`${BASE_URL}/setup/status`);
+    return res.data;
 }

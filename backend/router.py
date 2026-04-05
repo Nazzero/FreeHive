@@ -2,6 +2,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List
 from backend.session_manager import SessionManager
+from backend.account_store import add_account, get_accounts, remove_account
+
+## Router.py
 
 router = APIRouter()
 session_manager = SessionManager()
@@ -36,7 +39,7 @@ async def get_models():
     return {
         "models": [
             {"name": "claude", "status": "active"},
-            {"name": "chatgpt", "status": "coming_soon"},
+            {"name": "chatgpt", "status": "active"},
             {"name": "gemini", "status": "coming_soon"}
         ]
     }
@@ -44,7 +47,7 @@ async def get_models():
 @router.post("/compare")
 async def compare(request: CompareRequest):
     import asyncio
-    
+
     async def fetch(model):
         try:
             response = await session_manager.send_message(model, request.message)
@@ -54,3 +57,45 @@ async def compare(request: CompareRequest):
 
     results = await asyncio.gather(*[fetch(m) for m in request.models])
     return {"results": dict(results)}
+
+
+@router.post("/chat/clear")
+async def clear_history(model: str = None):
+    if model:
+        session_manager.clear_history(model)
+    else:
+        session_manager.clear_all_history()
+    return {"cleared": True}
+
+class AddAccountRequest(BaseModel):
+    model: str
+    username: str
+    password: str
+
+@router.post("/accounts")
+async def create_account(request: AddAccountRequest):
+    try:
+        account = add_account(request.model, request.username, request.password)
+        return account
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/accounts")
+async def list_accounts(model: str = None):
+    try:
+        accounts = get_accounts(model)
+        return {"accounts": accounts}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/accounts/{account_id}")
+async def delete_account(account_id: str):
+    try:
+        success = remove_account(account_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Account not found")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
