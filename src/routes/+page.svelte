@@ -99,9 +99,10 @@
                     on:click={() => $selectedModel = 'chatgpt'}>
                     <span class="dot green"></span> ChatGPT
                 </button>
-                <button class="model-btn disabled" disabled>
-                    <span class="dot gray"></span> Gemini
-                    <span class="soon">soon</span>
+                <button
+                    class="model-btn {$selectedModel === 'gemini' ? 'active' : ''}"
+                    on:click={() => $selectedModel = 'gemini'}>
+                    <span class="dot green"></span> Gemini
                 </button>
                 <button
                     class="model-btn new-chat-btn"
