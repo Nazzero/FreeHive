@@ -24,13 +24,24 @@ CLAUDE_AI_OAUTH_SCOPES = [
 class ClaudeDirectAdapter:
     """
     Calls api.anthropic.com/v1/messages directly using the OAuth token from
-    ~/.claude/.credentials.json with the anthropic-beta: oauth-2025-04-20 header
-    that enables OAuth Bearer auth on the messages endpoint.
+    ~/.claude/.credentials.json with the anthropic-beta: oauth-2025-04-20 header.
     Auto-refreshes the token when expired.
+    History is rebuilt from DB on each session resume.
     """
 
     def __init__(self):
         self.conversation_history: list[dict] = []
+
+    def load_history(self, history: list[dict]):
+        """
+        Rebuild internal history from DB messages.
+        Called by SessionManager when the adapter's history is empty (fresh start or restart).
+        history: list of {"role": "user"|"assistant", "content": str}
+        """
+        self.conversation_history = [
+            {"role": m["role"], "content": m["content"]}
+            for m in history
+        ]
 
     def _read_oauth(self) -> dict:
         if not CREDENTIALS_FILE.exists():
@@ -45,7 +56,6 @@ class ClaudeDirectAdapter:
         return oauth
 
     async def _refresh_oauth_token(self, refresh_token: str) -> str:
-        """Exchange refresh token for a fresh access token and update credentials file."""
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(
                 TOKEN_URL,
@@ -73,12 +83,11 @@ class ClaudeDirectAdapter:
             creds["claudeAiOauth"]["expiresAt"] = expires_at
             CREDENTIALS_FILE.write_text(json.dumps(creds, indent=2))
         except Exception:
-            pass  # non-fatal
+            pass
 
         return access_token
 
     async def _get_token(self) -> str:
-        """Return a valid access token, refreshing if within 5 min of expiry."""
         oauth = self._read_oauth()
         access_token = oauth["accessToken"]
         refresh_token = oauth.get("refreshToken")
@@ -90,11 +99,14 @@ class ClaudeDirectAdapter:
 
         return access_token
 
-    async def send_message(self, message: str) -> str:
+    async def send_message(self, message: str, history: list[dict] = None) -> str:
+        # If adapter history is empty and DB history is provided, rebuild it
+        if not self.conversation_history and history:
+            self.load_history(history)
+
         self.conversation_history.append({"role": "user", "content": message})
 
         for attempt in range(2):
-            # On second attempt force a token refresh in case it just expired
             if attempt == 1:
                 oauth = self._read_oauth()
                 refresh_token = oauth.get("refreshToken")
@@ -122,7 +134,7 @@ class ClaudeDirectAdapter:
                 )
 
             if response.status_code == 401 and attempt == 0:
-                continue  # retry with fresh token
+                continue
             if response.status_code == 429:
                 raise RuntimeError("Rate limited. Wait a moment and try again.")
             if response.status_code != 200:

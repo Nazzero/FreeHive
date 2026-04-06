@@ -33,7 +33,7 @@ class SessionManager:
         return ["claude", "chatgpt", "gemini"]
 
     async def send_message(self, model: str, message: str, session_id: str) -> str:
-        # Validate session exists
+        # Validate session
         session = cm.get_session(session_id)
         if not session:
             raise ValueError(f"Session '{session_id}' not found. Create one via POST /sessions.")
@@ -45,21 +45,22 @@ class SessionManager:
         adapter = self._get_adapter(model)
 
         # Load full history from DB
-        history = cm.get_messages(session_id)
-        history_payload = [{"role": m["role"], "content": m["content"]} for m in history]
+        messages = cm.get_messages(session_id)
+        history = [{"role": m["role"], "content": m["content"]} for m in messages]
 
+        # All three adapters now accept history for context rebuild on restart
         if model == "chatgpt":
-            response = await adapter.send_message(message, conversation_history=history_payload)
+            response = await adapter.send_message(message, conversation_history=history)
         else:
-            # Claude and Gemini manage their own internal history
-            # But we still pass history so they can rebuild context on restart
-            response = await adapter.send_message(message)
+            # Claude and Gemini: pass history so they can rebuild if their
+            # internal history is empty (app restart or first message)
+            response = await adapter.send_message(message, history=history)
 
         # Persist both turns to DB
         cm.add_message(session_id, "user", message)
         cm.add_message(session_id, "assistant", response)
 
-        # Auto-title session from first message (first 6 words)
+        # Auto-title from first message
         if not session.get("title"):
             words = message.strip().split()
             title = " ".join(words[:6])

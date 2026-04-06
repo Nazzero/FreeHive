@@ -9,28 +9,41 @@ GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMI
 class GeminiAdapter:
     """
     Calls Gemini via the Google Generative Language REST API.
-    Uses the user's own API key from aistudio.google.com.
-    Free tier: 25 requests/day for 2.5 Pro.
+    History is rebuilt from DB on session resume.
     """
 
     def __init__(self):
         self.conversation_history: list = []
 
-    async def send_message(self, message: str) -> str:
+    def load_history(self, history: list[dict]):
+        """
+        Rebuild internal history from DB messages.
+        history: list of {"role": "user"|"assistant", "content": str}
+        Converts to Gemini format: role "assistant" → "model"
+        """
+        self.conversation_history = [
+            {
+                "role": "model" if m["role"] == "assistant" else "user",
+                "parts": [{"text": m["content"]}]
+            }
+            for m in history
+        ]
+
+    async def send_message(self, message: str, history: list[dict] = None) -> str:
+        # Rebuild from DB if adapter history is empty (restart or first use)
+        if not self.conversation_history and history:
+            self.load_history(history)
+
         self.conversation_history.append({
             "role": "user",
             "parts": [{"text": message}]
         })
 
-        payload = {
-            "contents": self.conversation_history
-        }
-
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(
                 GEMINI_API_URL,
                 params={"key": GEMINI_API_KEY},
-                json=payload,
+                json={"contents": self.conversation_history},
                 headers={"Content-Type": "application/json"}
             )
 
@@ -43,7 +56,7 @@ class GeminiAdapter:
 
         try:
             reply = data["candidates"][0]["content"]["parts"][0]["text"]
-        except (KeyError, IndexError) as e:
+        except (KeyError, IndexError):
             raise RuntimeError(f"Could not parse Gemini response: {data}")
 
         self.conversation_history.append({
