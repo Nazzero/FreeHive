@@ -29,8 +29,9 @@ class ClaudeDirectAdapter:
     History is rebuilt from DB on each session resume.
     """
 
-    def __init__(self):
+    def __init__(self, model: str | None = None):
         self.conversation_history: list[dict] = []
+        self._model = model or DEFAULT_MODEL
 
     def load_history(self, history: list[dict]):
         """
@@ -99,12 +100,30 @@ class ClaudeDirectAdapter:
 
         return access_token
 
-    async def send_message(self, message: str, history: list[dict] = None) -> str:
-        # If adapter history is empty and DB history is provided, rebuild it
-        if not self.conversation_history and history:
-            self.load_history(history)
-
-        self.conversation_history.append({"role": "user", "content": message})
+    async def _call_api(
+        self,
+        messages: list[dict],
+        *,
+        max_tokens: int = 8096,
+        system: str | None = None,
+        tools: list[dict] | None = None,
+        tool_choice: dict | None = None,
+    ) -> dict:
+        """
+        Core API call — shared by send_message and raw_request.
+        Returns the full Anthropic API response dict.
+        """
+        body: dict = {
+            "model": self._model,
+            "max_tokens": max_tokens,
+            "messages": messages,
+        }
+        if system:
+            body["system"] = system
+        if tools:
+            body["tools"] = tools
+        if tool_choice:
+            body["tool_choice"] = tool_choice
 
         for attempt in range(2):
             if attempt == 1:
@@ -126,11 +145,7 @@ class ClaudeDirectAdapter:
                         "anthropic-beta": "oauth-2025-04-20",
                         "content-type": "application/json",
                     },
-                    json={
-                        "model": DEFAULT_MODEL,
-                        "max_tokens": 8096,
-                        "messages": self.conversation_history,
-                    },
+                    json=body,
                 )
 
             if response.status_code == 401 and attempt == 0:
@@ -141,14 +156,51 @@ class ClaudeDirectAdapter:
                 raise RuntimeError(
                     f"API error {response.status_code}: {response.text[:200]}"
                 )
-
-            assistant_text = response.json()["content"][0]["text"]
-            self.conversation_history.append(
-                {"role": "assistant", "content": assistant_text}
-            )
-            return assistant_text
+            return response.json()
 
         raise RuntimeError("Claude session expired. Re-authenticate in Setup.")
+
+    async def raw_request(
+        self,
+        messages: list[dict],
+        *,
+        max_tokens: int = 8096,
+        system: str | None = None,
+        tools: list[dict] | None = None,
+        tool_choice: dict | None = None,
+    ) -> dict:
+        """
+        Pass-through for the compat layer — returns the full API response dict.
+        Does not touch self.conversation_history (the client owns state).
+        Supports tools, tool_choice, and multi-content responses.
+        """
+        return await self._call_api(
+            messages,
+            max_tokens=max_tokens,
+            system=system,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+
+    async def send_message(self, message: str, history: list[dict] = None) -> str:
+        # If adapter history is empty and DB history is provided, rebuild it
+        if not self.conversation_history and history:
+            self.load_history(history)
+
+        self.conversation_history.append({"role": "user", "content": message})
+
+        result = await self._call_api(self.conversation_history)
+
+        # Extract text from first text block (internal chat — no tool_use expected)
+        content = result.get("content", [])
+        assistant_text = next(
+            (b["text"] for b in content if b.get("type") == "text"),
+            "",
+        )
+        self.conversation_history.append(
+            {"role": "assistant", "content": assistant_text}
+        )
+        return assistant_text
 
     def clear_history(self):
         self.conversation_history = []

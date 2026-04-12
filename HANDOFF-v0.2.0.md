@@ -226,3 +226,19 @@ The development machine already has OpenClaude installed globally and authentica
 4. **ChatGPT adapter via Playwright** — use stored credentials from `account_store.py` to automate `chat.openai.com`
 5. **Gemini adapter via Playwright** — same pattern for `gemini.google.com`
 6. **Tauri sidecar (v2)** — PyInstaller bundle + sidecar config + Rust lifecycle management
+
+# Terminal 1 — Chrome with CDP
+pkill -9 -f chrome
+sleep 2
+/usr/bin/google-chrome --remote-debugging-port=9222 --user-data-dir=/home/nazmoney/.config/google-chrome --no-first-run &
+sleep 3
+curl http://localhost:9222/json  # verify it's up
+
+# Terminal 2 — Backend
+cd ~/Ilee_AI
+source venv/bin/activate
+uvicorn backend.main:app --host 127.0.0.1 --port 7200 --reload
+
+# Terminal 3 — Frontend
+cd ~/Ilee_AI
+npm run dev

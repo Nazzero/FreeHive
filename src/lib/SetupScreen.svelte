@@ -1,15 +1,18 @@
 <script>
     import { createEventDispatcher } from 'svelte';
+    import { API_BASE_URL } from '$lib/config.js';
 
     const dispatch = createEventDispatcher();
-    const BASE_URL = 'http://localhost:8000/api';
+    const BASE_URL = API_BASE_URL;
 
     // ── Setup step ────────────────────────────────────────────────────────
-    // 'choose'  → user picks openclaude or claude_code
+    // 'choose'  → user picks openclaude, claude_code, or gemini_cli
     // 'setup'   → install + auth for the chosen tool
     let step = 'choose';
-    let chosenTool = null; // 'openclaude' | 'claude_code'
+    /** @type {string | null} */
+    let chosenTool = null; // 'openclaude' | 'claude_code' | 'gemini_cli'
 
+    /** @type {Record<string, any>} */
     const TOOL_META = {
         openclaude: {
             name: 'OpenClaude',
@@ -37,13 +40,28 @@
             ],
             warn: 'Requires Claude Pro ($20/mo). Free accounts will fail at auth.',
         },
+        gemini_cli: {
+            name: 'Gemini CLI',
+            tag: 'Free access',
+            tagColor: 'green',
+            headline: 'Official Google Gemini CLI',
+            bullets: [
+                'Works with a free Google account',
+                '1 million token context window',
+                'Direct API access — fast and reliable',
+                'Best for large documents and complex tasks',
+            ],
+            warn: null,
+        },
     };
 
     // ── Status ────────────────────────────────────────────────────────────
+    /** @type {any} */
     let status = {
         prerequisites: { node: false, npm: false, ripgrep: false },
         openclaude: { installed: false, authenticated: false, tier: null },
         claude_code: { installed: false, authenticated: false, tier: null },
+        gemini_cli: { installed: false, authenticated: false },
         selected_tool: null,
         ready: false,
     };
@@ -51,9 +69,11 @@
     let loading = true;
     let backendError = '';
 
+    /** @type {Record<string, any>} */
     let toolState = {
         openclaude: { installing: false, authing: false, log: [] },
         claude_code: { installing: false, authing: false, log: [] },
+        gemini_cli: { installing: false, authing: false, log: [] },
     };
 
     async function fetchStatus() {
@@ -63,13 +83,11 @@
             const res = await fetch(`${BASE_URL}/setup/status`);
             status = await res.json();
 
-            // If already configured from a previous run, skip straight to setup step
             if (status.selected_tool) {
                 chosenTool = status.selected_tool;
                 step = 'setup';
             }
 
-            // If already fully ready, proceed immediately
             if (status.ready) {
                 dispatch('ready', { tool: status.selected_tool });
             }
@@ -84,9 +102,9 @@
 
     // ── Tool selection ────────────────────────────────────────────────────
 
+    /** @param {string} tool */
     async function selectTool(tool) {
         chosenTool = tool;
-        // Persist choice to backend config
         try {
             await fetch(`${BASE_URL}/setup/select-tool`, {
                 method: 'POST',
@@ -94,7 +112,6 @@
                 body: JSON.stringify({ tool }),
             });
         } catch {
-            // Non-fatal — choice still works in memory for this session
         }
         step = 'setup';
     }
@@ -106,7 +123,13 @@
 
     // ── SSE stream helpers ────────────────────────────────────────────────
 
+    /**
+     * @param {Response} res
+     * @param {string} tool
+     * @param {Function} onDone
+     */
     async function streamSSE(res, tool, onDone) {
+        if (!res.body) return;
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
 
@@ -135,6 +158,7 @@
 
     // ── Install ───────────────────────────────────────────────────────────
 
+    /** @param {string} tool */
     async function install(tool) {
         toolState[tool] = { installing: true, authing: false, log: ['Starting install…'] };
 
@@ -144,7 +168,7 @@
             body: JSON.stringify({ tool }),
         });
 
-        await streamSSE(res, tool, async (data) => {
+        await streamSSE(res, tool, async (/** @type {any} */ data) => {
             toolState[tool].installing = false;
             if (data.success) {
                 toolState[tool].log = [...toolState[tool].log, '✓ Installed successfully.'];
@@ -157,12 +181,13 @@
 
     // ── Auth ──────────────────────────────────────────────────────────────
 
+    /** @param {string} tool */
     async function startAuth(tool) {
         toolState[tool] = { installing: false, authing: true, log: ['Launching authentication…'] };
 
         const res = await fetch(`${BASE_URL}/setup/auth/${tool}`);
 
-        await streamSSE(res, tool, async (data) => {
+        await streamSSE(res, tool, async (/** @type {any} */ data) => {
             toolState[tool].authing = false;
             if (data.status === 'success') {
                 toolState[tool].log = [...toolState[tool].log, '✓ Authenticated.'];
@@ -192,8 +217,8 @@
                 <h1>FreeHive</h1>
             </div>
             <p class="subtitle">
-                {#if step === 'choose'}First, choose how to connect Claude.
-                {:else}{TOOL_META[chosenTool].name} selected
+                {#if step === 'choose'}First, choose how to connect.
+                {:else}{TOOL_META[chosenTool || 'openclaude'].name} selected
                     <button class="back-link" on:click={backToChoose}>← change</button>
                 {/if}
             </p>
@@ -286,9 +311,9 @@
             </div>
 
             <!-- Single tool card for the chosen tool -->
-            {@const s = status[chosenTool]}
-            {@const ts = toolState[chosenTool]}
-            {@const meta = TOOL_META[chosenTool]}
+            {@const s = status[chosenTool || 'openclaude']}
+            {@const ts = toolState[chosenTool || 'openclaude']}
+            {@const meta = TOOL_META[chosenTool || 'openclaude']}
             {@const canInstall = status.prerequisites.npm && status.prerequisites.node}
 
             <div class="tool-card {s.authenticated ? 'connected' : ''}">
@@ -304,7 +329,7 @@
                                 Connected{s.tier ? ` · ${s.tier}` : ''}
                             </span>
                         {:else if s.installed}
-                            <span class="badge yellow">Installed · not authenticated</span>
+                            <span class="badge yellow">Installed</span>
                         {:else}
                             <span class="badge gray">Not installed</span>
                         {/if}
@@ -315,7 +340,7 @@
                     <button
                         class="action-btn"
                         disabled={!canInstall || ts.authing}
-                        on:click={() => install(chosenTool)}
+                        on:click={() => install(chosenTool || 'openclaude')}
                         title={!canInstall ? 'Install Node.js and npm first' : ''}
                     >
                         Install {meta.name}
@@ -326,9 +351,9 @@
                     <button
                         class="action-btn"
                         disabled={ts.installing}
-                        on:click={() => startAuth(chosenTool)}
+                        on:click={() => startAuth(chosenTool || 'openclaude')}
                     >
-                        Authenticate — opens browser
+                        Authenticate
                     </button>
                 {/if}
 
@@ -367,12 +392,14 @@
         align-items: center;
         justify-content: center;
         min-height: 100vh;
-        background: #0a0a0a;
+        background: var(--bg-primary);
         padding: 32px 16px;
+        color: var(--text-primary);
     }
 
     .setup-card {
-        width: 580px;
+        width: 100%;
+        max-width: 600px;
         display: flex;
         flex-direction: column;
         gap: 24px;
@@ -384,102 +411,115 @@
         align-items: center;
         gap: 8px;
         margin-bottom: 4px;
+        justify-content: center;
     }
 
     .logo-hex {
-        font-size: 20px;
-        color: #6366f1;
+        font-size: 24px;
+        color: var(--text-primary);
         line-height: 1;
     }
 
+    .setup-header {
+        text-align: center;
+        margin-bottom: 8px;
+    }
+
     .setup-header h1 {
-        font-size: 20px;
+        font-size: 24px;
         font-weight: 600;
-        color: #fff;
-        letter-spacing: -0.3px;
+        color: var(--text-primary);
+        letter-spacing: -0.5px;
     }
 
     .subtitle {
-        font-size: 13px;
-        color: #444;
+        font-size: 14px;
+        color: var(--text-secondary);
         display: flex;
         align-items: center;
+        justify-content: center;
         gap: 8px;
+        margin-top: 8px;
     }
 
     .back-link {
         background: none;
         border: none;
-        color: #5555aa;
-        font-size: 12px;
+        color: var(--text-muted);
+        font-size: 13px;
         cursor: pointer;
         padding: 0;
         text-decoration: underline;
         text-underline-offset: 2px;
     }
-    .back-link:hover { color: #8888ff; }
+    .back-link:hover { color: var(--text-primary); }
 
     /* Loading */
     .checking {
-        font-size: 13px;
-        color: #444;
+        font-size: 14px;
+        color: var(--text-secondary);
         display: flex;
         align-items: center;
-        gap: 8px;
+        justify-content: center;
+        gap: 12px;
     }
 
     .mini-spinner {
-        width: 10px;
-        height: 10px;
-        border: 1.5px solid #2a2a2a;
-        border-top-color: #6366f1;
+        width: 12px;
+        height: 12px;
+        border: 2px solid var(--border-medium);
+        border-top-color: var(--text-primary);
         border-radius: 50%;
         animation: spin 0.7s linear infinite;
         flex-shrink: 0;
     }
 
     .alert-error {
-        background: #2a1a1a;
-        border: 1px solid #5a2a2a;
-        color: #ff8888;
-        padding: 12px 14px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-medium);
+        color: #ef4444;
+        padding: 12px 16px;
         border-radius: 8px;
-        font-size: 13px;
+        font-size: 14px;
         line-height: 1.5;
+        text-align: center;
     }
 
     /* Step 1: Choose */
     .choose-label {
-        font-size: 11px;
-        color: #444;
+        font-size: 12px;
+        color: var(--text-muted);
         text-transform: uppercase;
         letter-spacing: 0.8px;
+        text-align: center;
     }
 
     .choice-grid {
         display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 12px;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 16px;
     }
 
     .choice-card {
-        background: #111;
-        border: 1px solid #1e1e1e;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-medium);
         border-radius: 12px;
-        padding: 18px;
+        padding: 20px;
         text-align: left;
         cursor: pointer;
         display: flex;
         flex-direction: column;
-        gap: 10px;
-        transition: border-color 0.15s, background 0.15s;
+        gap: 12px;
+        transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
         color: inherit;
         font: inherit;
+        min-height: 220px;
     }
 
     .choice-card:hover {
-        border-color: #3333aa;
-        background: #13131f;
+        border-color: var(--text-muted);
+        box-shadow: var(--shadow-subtle);
+        transform: translateY(-2px);
     }
 
     .choice-top {
@@ -490,25 +530,25 @@
     }
 
     .choice-name {
-        font-size: 14px;
+        font-size: 16px;
         font-weight: 600;
-        color: #e0e0e0;
+        color: var(--text-primary);
     }
 
     .choice-tag {
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 500;
-        padding: 2px 7px;
-        border-radius: 4px;
+        padding: 2px 8px;
+        border-radius: 12px;
         flex-shrink: 0;
     }
 
-    .choice-tag.green  { background: #0d2a1a; color: #3ecf8e; border: 1px solid #1a4a2a; }
-    .choice-tag.yellow { background: #2a2010; color: #f59e0b; border: 1px solid #4a3510; }
+    .choice-tag.green  { background: var(--bg-tertiary); color: var(--accent-color); }
+    .choice-tag.yellow { background: var(--bg-tertiary); color: #f59e0b; }
 
     .choice-headline {
-        font-size: 12px;
-        color: #666;
+        font-size: 13px;
+        color: var(--text-secondary);
         margin: 0;
         line-height: 1.4;
     }
@@ -519,12 +559,12 @@
         margin: 0;
         display: flex;
         flex-direction: column;
-        gap: 5px;
+        gap: 6px;
     }
 
     .choice-bullets li {
-        font-size: 11.5px;
-        color: #4a4a4a;
+        font-size: 12px;
+        color: var(--text-secondary);
         padding-left: 14px;
         position: relative;
         line-height: 1.4;
@@ -534,171 +574,171 @@
         content: '·';
         position: absolute;
         left: 4px;
-        color: #333;
+        color: var(--text-muted);
     }
 
     .choice-warn {
-        font-size: 11px;
-        color: #a87a20;
-        background: #1c1600;
-        border: 1px solid #3a2e00;
-        border-radius: 5px;
-        padding: 6px 9px;
+        font-size: 12px;
+        color: #f59e0b;
+        background: var(--bg-tertiary);
+        border-radius: 6px;
+        padding: 8px 12px;
         margin: 0;
         line-height: 1.4;
     }
 
     .choice-cta {
-        font-size: 12px;
-        color: #4444aa;
-        margin-top: 4px;
-        transition: color 0.15s;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-primary);
+        margin-top: auto;
+        opacity: 0;
+        transform: translateX(-4px);
+        transition: opacity 0.2s, transform 0.2s;
     }
 
-    .choice-card:hover .choice-cta { color: #8888ff; }
+    .choice-card:hover .choice-cta { opacity: 1; transform: translateX(0); }
 
     /* Prerequisites */
     .section-label {
-        font-size: 11px;
-        color: #444;
+        font-size: 12px;
+        color: var(--text-muted);
         text-transform: uppercase;
         letter-spacing: 0.8px;
-        margin-bottom: 10px;
+        margin-bottom: 12px;
     }
 
     .prereq-section {
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 12px;
     }
 
     .prereq-grid {
         display: flex;
         flex-direction: column;
-        gap: 6px;
-        background: #111;
-        border: 1px solid #1e1e1e;
-        border-radius: 8px;
-        padding: 12px 14px;
+        gap: 8px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-medium);
+        border-radius: 12px;
+        padding: 16px;
     }
 
     .prereq-row {
         display: flex;
         align-items: center;
-        gap: 10px;
-        font-size: 13px;
+        gap: 12px;
+        font-size: 14px;
     }
 
-    .check { font-size: 13px; font-weight: 600; width: 14px; flex-shrink: 0; }
-    .check.ok   { color: #3ecf8e; }
+    .check { font-size: 14px; font-weight: 600; width: 16px; flex-shrink: 0; }
+    .check.ok   { color: var(--accent-color); }
     .check.fail { color: #ef4444; }
 
-    .prereq-name { color: #aaa; flex-shrink: 0; }
-    .prereq-hint { color: #444; font-size: 12px; }
+    .prereq-name { color: var(--text-primary); flex-shrink: 0; }
+    .prereq-hint { color: var(--text-secondary); font-size: 13px; }
 
     code.prereq-cmd {
-        font-size: 11px;
+        font-size: 12px;
         font-family: monospace;
-        background: #1a1a1a;
-        border: 1px solid #2a2a2a;
-        color: #888;
-        padding: 2px 6px;
-        border-radius: 4px;
+        background: var(--bg-tertiary);
+        color: var(--text-primary);
+        padding: 4px 8px;
+        border-radius: 6px;
     }
 
     .prereq-warn {
-        font-size: 12px;
+        font-size: 13px;
         color: #f59e0b;
-        background: #1a1400;
-        border: 1px solid #3a2e00;
-        border-radius: 6px;
-        padding: 8px 12px;
+        background: var(--bg-tertiary);
+        border-radius: 8px;
+        padding: 12px 16px;
     }
 
     /* Tool card */
     .tool-card {
-        background: #111;
-        border: 1px solid #1e1e1e;
-        border-radius: 10px;
-        padding: 16px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-medium);
+        border-radius: 12px;
+        padding: 20px;
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 16px;
         transition: border-color 0.2s;
     }
 
     .tool-card.connected {
-        border-color: #1a3a2a;
-        background: #0d1712;
+        border-color: var(--border-medium);
+        background: var(--bg-secondary);
     }
 
     .tool-header {
         display: flex;
         align-items: flex-start;
         justify-content: space-between;
-        gap: 12px;
+        gap: 16px;
     }
 
-    .tool-meta { display: flex; flex-direction: column; gap: 3px; }
-    .tool-name { font-size: 14px; font-weight: 500; color: #e0e0e0; }
-    .tool-desc { font-size: 12px; color: #444; }
+    .tool-meta { display: flex; flex-direction: column; gap: 4px; }
+    .tool-name { font-size: 16px; font-weight: 600; color: var(--text-primary); }
+    .tool-desc { font-size: 13px; color: var(--text-secondary); }
 
     .badge-wrap { flex-shrink: 0; }
 
     .badge {
         display: inline-flex;
         align-items: center;
-        gap: 5px;
-        font-size: 11px;
-        padding: 3px 8px;
-        border-radius: 4px;
+        gap: 6px;
+        font-size: 12px;
+        padding: 4px 10px;
+        border-radius: 6px;
+        background: var(--bg-tertiary);
+        color: var(--text-secondary);
     }
 
-    .badge.green  { background: #0d2a1a; color: #3ecf8e; border: 1px solid #1a4a2a; }
-    .badge.yellow { background: #2a2010; color: #f59e0b; border: 1px solid #4a3510; }
-    .badge.gray   { background: #181818; color: #444;    border: 1px solid #222; }
+    .badge.green  { color: var(--accent-color); }
+    .badge.yellow { color: #f59e0b; }
 
     .dot {
         width: 6px;
         height: 6px;
         border-radius: 50%;
-        background: #3ecf8e;
+        background: var(--accent-color);
         flex-shrink: 0;
     }
 
     .action-btn {
-        background: #14142a;
-        border: 1px solid #222255;
-        color: #7777ee;
-        padding: 8px 14px;
-        border-radius: 7px;
-        font-size: 13px;
+        background: var(--text-primary);
+        border: none;
+        color: var(--bg-primary);
+        padding: 10px 16px;
+        border-radius: 8px;
+        font-size: 14px;
         font-weight: 500;
         cursor: pointer;
-        text-align: left;
-        transition: background 0.15s;
+        text-align: center;
+        transition: opacity 0.2s;
         width: fit-content;
     }
 
-    .action-btn:hover:not(:disabled) { background: #1c1c40; }
-    .action-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+    .action-btn:hover:not(:disabled) { opacity: 0.8; }
+    .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
     /* Log */
     .log {
-        background: #080808;
-        border: 1px solid #181818;
-        border-radius: 6px;
-        padding: 10px 12px;
-        max-height: 130px;
+        background: var(--bg-tertiary);
+        border-radius: 8px;
+        padding: 12px 16px;
+        max-height: 160px;
         overflow-y: auto;
         display: flex;
         flex-direction: column;
-        gap: 2px;
+        gap: 4px;
     }
 
     .log-line {
-        font-size: 11px;
-        color: #444;
+        font-size: 12px;
+        color: var(--text-secondary);
         font-family: monospace;
         white-space: pre-wrap;
         word-break: break-all;
@@ -709,14 +749,15 @@
     .spinner-row {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 12px;
+        padding: 8px 0;
     }
 
     .spinner {
-        width: 12px;
-        height: 12px;
-        border: 2px solid #1e1e3a;
-        border-top-color: #6366f1;
+        width: 14px;
+        height: 14px;
+        border: 2px solid var(--border-medium);
+        border-top-color: var(--text-primary);
         border-radius: 50%;
         animation: spin 0.8s linear infinite;
         flex-shrink: 0;
@@ -724,44 +765,44 @@
 
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    .spinner-label { font-size: 12px; color: #444; }
+    .spinner-label { font-size: 13px; color: var(--text-secondary); }
 
     /* Continue / Refresh */
     .continue-btn {
-        background: #14142a;
-        border: 1px solid #222255;
-        color: #7777ee;
-        padding: 12px;
-        border-radius: 8px;
-        font-size: 14px;
+        background: var(--text-primary);
+        border: none;
+        color: var(--bg-primary);
+        padding: 14px;
+        border-radius: 12px;
+        font-size: 15px;
         font-weight: 500;
         cursor: pointer;
         width: 100%;
-        transition: all 0.15s;
+        transition: opacity 0.2s;
+        margin-top: 8px;
     }
 
     .continue-btn:hover:not(:disabled) {
-        background: #1c1c40;
-        color: #aaaaff;
+        opacity: 0.8;
     }
 
     .continue-btn:disabled {
-        opacity: 0.3;
+        opacity: 0.5;
         cursor: not-allowed;
-        color: #444;
-        background: #111;
-        border-color: #1e1e1e;
+        background: var(--bg-tertiary);
+        color: var(--text-muted);
     }
 
     .refresh-btn {
         background: transparent;
         border: none;
-        color: #333;
-        font-size: 12px;
+        color: var(--text-muted);
+        font-size: 13px;
         cursor: pointer;
         align-self: center;
-        padding: 4px 8px;
+        padding: 8px 12px;
+        transition: color 0.2s;
     }
 
-    .refresh-btn:hover { color: #555; }
+    .refresh-btn:hover { color: var(--text-primary); }
 </style>

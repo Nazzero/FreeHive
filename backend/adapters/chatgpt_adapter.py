@@ -1,4 +1,5 @@
 import asyncio
+import os
 import re
 import subprocess
 import threading
@@ -6,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 CODEX_WORKDIR = Path.home() / "Ilee_AI"
-DEFAULT_MODEL = "gpt-5.4"
+DEFAULT_MODEL = "gpt-5.2"
 
 
 class ChatGPTAdapter:
@@ -17,7 +18,7 @@ class ChatGPTAdapter:
     """
 
     def __init__(self):
-        self.model = DEFAULT_MODEL
+        self.model = os.getenv("CHATGPT_CLI_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
 
     async def send_message(self, message: str, conversation_history: list = None) -> str:
         prompt = self._build_prompt(message, conversation_history)
