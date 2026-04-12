@@ -8,3 +8,17 @@ node_modules
 !.env.example
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Tauri / Rust
+/src-tauri/target/
+/dist/
+
+# Logs
+*.log
+

@@ -1,91 +1,316 @@
 <script>
-    import { onMount } from 'svelte';
-    import axios from 'axios';
+    import { createEventDispatcher, onMount } from 'svelte';
+    import { authenticateTool, getSetupStatus, logoutTool } from '$lib/api.js';
 
-    const BASE_URL = 'http://localhost:8000/api';
+    const dispatch = createEventDispatcher();
 
-    let accounts = [];
-    let showForm = false;
-    let loading = false;
+    /** @type {any} */
+    let status = null;
+    let loading = true;
     let error = '';
     let success = '';
+    let busyLogoutTool = '';
+    let busyLoginTool = '';
+    let loginProgress = '';
+    /** @type {number | null} */
+    let lastUpdatedAt = null;
 
-    let form = {
-        model: 'chatgpt',
-        username: '',
-        password: ''
-    };
+    onMount(fetchStatus);
 
-    const models = [
-        { value: 'gemini', label: 'Gemini' },
-        { value: 'claude', label: 'Claude' }
-    ];
-
-    const statusColors = {
-        active: '#3ecf8e',
-        rate_limited: '#f59e0b',
-        banned: '#ef4444'
-    };
-
-    onMount(fetchAccounts);
-
-    async function fetchAccounts() {
-        try {
-            const res = await axios.get(`${BASE_URL}/accounts`);
-            accounts = res.data.accounts;
-        } catch (e) {
-            error = 'Failed to load accounts';
-        }
-    }
-
-    async function addAccount() {
-        if (!form.username || !form.password) {
-            error = 'Username and password required';
-            return;
-        }
-        loading = true;
+    /**
+     * @param {{ silent?: boolean }} [opts]
+     */
+    async function fetchStatus(opts = {}) {
+        const { silent = false } = opts;
+        if (!silent) loading = true;
         error = '';
         try {
-            await axios.post(`${BASE_URL}/accounts`, form);
-            success = 'Account added successfully';
-            form = { model: 'chatgpt', username: '', password: '' };
-            showForm = false;
-            await fetchAccounts();
-            setTimeout(() => success = '', 3000);
+            status = await getSetupStatus();
+            lastUpdatedAt = Date.now();
         } catch (e) {
-            error = e.response?.data?.detail || 'Failed to add account';
+            error = 'Failed to load account status.';
         } finally {
-            loading = false;
+            if (!silent) loading = false;
         }
     }
 
-    async function deleteAccount(id) {
+    /**
+     * @param {any} current
+     * @returns {any[]}
+     */
+    function toProviders(current) {
+        const openclaude = current?.openclaude || {};
+        const claudeCode = current?.claude_code || {};
+        const gemini = current?.gemini_cli || {};
+        const chatgpt = current?.chatgpt_cli || {};
+        const selectedTool = current?.selected_tool || null;
+
+        const activeClaudeTools = [];
+        if (openclaude.authenticated) activeClaudeTools.push('OpenClaude CLI');
+        if (claudeCode.authenticated) activeClaudeTools.push('Claude Code CLI');
+        const claudeTier = openclaude.tier || claudeCode.tier || null;
+        const claudeInstalled = Boolean(openclaude.installed || claudeCode.installed);
+        const claudeLoginTool = (
+            selectedTool === 'openclaude' || selectedTool === 'claude_code'
+                ? selectedTool
+                : openclaude.installed
+                ? 'openclaude'
+                : claudeCode.installed
+                ? 'claude_code'
+                : 'openclaude'
+        );
+        const claudeAccount = (
+            openclaude.account_email
+            || claudeCode.account_email
+            || openclaude.account_label
+            || claudeCode.account_label
+            || openclaude.account_name
+            || claudeCode.account_name
+            || null
+        );
+        const chatgptAccount = (
+            chatgpt.account_email
+            || chatgpt.account_label
+            || chatgpt.account_name
+            || null
+        );
+        const geminiAccount = (
+            gemini.account_email
+            || gemini.account_label
+            || gemini.account_name
+            || null
+        );
+
+        return [
+            {
+                id: 'claude',
+                name: 'Claude',
+                authenticated: activeClaudeTools.length > 0,
+                installed: claudeInstalled,
+                tier: claudeTier,
+                detail: activeClaudeTools.length > 0
+                    ? (claudeAccount
+                        ? `Connected as ${claudeAccount} via ${activeClaudeTools.join(' + ')}`
+                        : `Connected via ${activeClaudeTools.join(' + ')} (account email unavailable token)`)
+                    : (claudeInstalled ? 'CLI installed, not authenticated' : 'CLI not installed'),
+                logoutTool: 'claude',
+                loginTool: claudeLoginTool,
+                loginOptions: [
+                    { tool: 'openclaude', label: 'OpenClaude', installed: Boolean(openclaude.installed) },
+                    { tool: 'claude_code', label: 'Claude Code', installed: Boolean(claudeCode.installed) },
+                ],
+            },
+            {
+                id: 'chatgpt',
+                name: 'ChatGPT',
+                authenticated: Boolean(chatgpt.authenticated),
+                installed: Boolean(chatgpt.installed),
+                tier: chatgpt.tier || null,
+                detail: chatgpt.authenticated
+                    ? (chatgptAccount
+                        ? `Connected as ${chatgptAccount} via Codex CLI auth`
+                        : 'Connected via Codex CLI auth')
+                    : (chatgpt.installed ? 'Codex CLI installed, not authenticated' : 'Codex CLI not installed'),
+                logoutTool: 'chatgpt_cli',
+                loginTool: 'chatgpt_cli',
+            },
+            {
+                id: 'gemini',
+                name: 'Gemini',
+                authenticated: Boolean(gemini.authenticated),
+                installed: Boolean(gemini.installed),
+                tier: null,
+                detail: gemini.authenticated
+                    ? (geminiAccount
+                        ? `Connected as ${geminiAccount} via Gemini CLI auth`
+                        : 'Connected via Gemini CLI auth')
+                    : (gemini.installed ? 'Gemini CLI installed, not authenticated' : 'Gemini CLI not installed'),
+                logoutTool: 'gemini_cli',
+                loginTool: 'gemini_cli',
+            },
+        ];
+    }
+
+    /**
+     * @param {any} provider
+     * @returns {string}
+     */
+    function statusLabel(provider) {
+        if (!provider.authenticated) return 'Disconnected';
+        return provider.tier ? `Active · ${provider.tier}` : 'Active';
+    }
+
+    /**
+     * @param {any} provider
+     * @returns {string}
+     */
+    function loginButtonLabel(provider) {
+        if (!provider.installed) return 'Open Setup';
+        if (provider.loginTool === 'openclaude') return 'Login via OpenClaude';
+        if (provider.loginTool === 'claude_code') return 'Login via Claude Code';
+        if (provider.loginTool === 'chatgpt_cli') return 'Login via Chatgpt';
+        if (provider.loginTool === 'gemini_cli') return 'Login via Gemini';
+        return 'Login via Provider';
+    }
+
+    /**
+     * @param {any} value
+     * @returns {any}
+     */
+    function clone(value) {
+        return JSON.parse(JSON.stringify(value));
+    }
+
+    /**
+     * @param {any} current
+     * @param {string} tool
+     * @returns {any}
+     */
+    function optimisticLogout(current, tool) {
+        if (!current) return current;
+
+        if (tool === 'claude' || tool === 'openclaude' || tool === 'claude_code') {
+            return {
+                ...current,
+                openclaude: {
+                    ...(current.openclaude || {}),
+                    authenticated: false,
+                    tier: null,
+                },
+                claude_code: {
+                    ...(current.claude_code || {}),
+                    authenticated: false,
+                    tier: null,
+                },
+            };
+        }
+
+        if (tool === 'chatgpt' || tool === 'chatgpt_cli') {
+            return {
+                ...current,
+                chatgpt_cli: {
+                    ...(current.chatgpt_cli || {}),
+                    authenticated: false,
+                    tier: null,
+                },
+            };
+        }
+
+        if (tool === 'gemini' || tool === 'gemini_cli') {
+            return {
+                ...current,
+                gemini_cli: {
+                    ...(current.gemini_cli || {}),
+                    authenticated: false,
+                },
+            };
+        }
+
+        return current;
+    }
+
+    /**
+     * @param {number | null} ts
+     * @returns {string}
+     */
+    function formatLastUpdated(ts) {
+        if (!ts) return 'Never';
+        const date = new Date(ts);
+        return date.toLocaleString([], {
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+        });
+    }
+
+    /**
+     * @param {any} provider
+     */
+    async function handleLogout(provider) {
+        busyLogoutTool = provider.logoutTool;
+        error = '';
+        success = '';
+        const previousStatus = status ? clone(status) : null;
+        status = optimisticLogout(status, provider.logoutTool);
+        lastUpdatedAt = Date.now();
         try {
-            await axios.delete(`${BASE_URL}/accounts/${id}`);
-            await fetchAccounts();
+            const result = await logoutTool(provider.logoutTool);
+            if (!result?.success) {
+                throw new Error(result?.error || 'Logout failed');
+            }
+            success = `${provider.name} logged out.`;
+            await fetchStatus({ silent: true });
         } catch (e) {
-            error = 'Failed to delete account';
+            if (previousStatus) {
+                status = previousStatus;
+            }
+            error = /** @type {any} */ (e)?.message || `Failed to log out ${provider.name}.`;
+        } finally {
+            busyLogoutTool = '';
         }
     }
 
-    function groupByModel(accounts) {
-        return accounts.reduce((groups, acc) => {
-            if (!groups[acc.model]) groups[acc.model] = [];
-            groups[acc.model].push(acc);
-            return groups;
-        }, {});
+    /**
+     * @param {any} provider
+     */
+    async function handleLogin(provider, tool = provider.loginTool) {
+        if (provider.id === 'claude') {
+            const option = Array.isArray(provider.loginOptions)
+                ? provider.loginOptions.find((/** @type {any} */ o) => o.tool === tool)
+                : null;
+            if (!option?.installed) {
+                dispatch('openSettings', { provider: provider.id });
+                return;
+            }
+        } else if (!provider.installed) {
+            dispatch('openSettings', { provider: provider.id });
+            return;
+        }
+
+        busyLoginTool = tool;
+        loginProgress = 'Launching authentication flow...';
+        error = '';
+        success = '';
+
+        try {
+            await authenticateTool(tool, (event) => {
+                if (event?.status === 'browser_opened') {
+                    loginProgress = event.msg || 'Browser opened. Complete login there.';
+                } else if (event?.status === 'waiting') {
+                    loginProgress = event.msg || 'Waiting for login completion...';
+                } else if (event?.status === 'output' && event?.msg) {
+                    loginProgress = event.msg;
+                } else if (event?.status === 'starting') {
+                    loginProgress = event.msg || 'Starting authentication...';
+                }
+            });
+
+            await fetchStatus({ silent: true });
+            success = `${provider.name} login complete.`;
+        } catch (e) {
+            error = /** @type {any} */ (e)?.message || `Failed to log in to ${provider.name}.`;
+        } finally {
+            busyLoginTool = '';
+            loginProgress = '';
+        }
     }
 
-    $: grouped = groupByModel(accounts);
+    $: providers = toProviders(status);
+    $: lastUpdatedLabel = formatLastUpdated(lastUpdatedAt);
 </script>
 
 <div class="panel">
     <div class="panel-header">
         <h2>Accounts</h2>
-        <button class="add-btn" on:click={() => showForm = !showForm}>
-            {showForm ? 'Cancel' : '+ Add'}
+        <button class="refresh-btn" on:click={() => fetchStatus()} disabled={loading}>
+            {loading ? 'Refreshing...' : 'Refresh'}
         </button>
     </div>
+
+    <p class="panel-subtitle">Manage CLI-linked provider accounts.</p>
+    <p class="updated-at">Last updated: {lastUpdatedLabel}</p>
 
     {#if error}
         <div class="alert error">{error}</div>
@@ -95,58 +320,62 @@
         <div class="alert success">{success}</div>
     {/if}
 
-    {#if showForm}
-        <div class="form">
-            <select bind:value={form.model}>
-                {#each models as m}
-                    <option value={m.value}>{m.label}</option>
-                {/each}
-            </select>
-            <input
-                type="text"
-                placeholder="Email or username"
-                bind:value={form.username}
-            />
-            <input
-                type="password"
-                placeholder="Password"
-                bind:value={form.password}
-            />
-            <button class="submit-btn" on:click={addAccount} disabled={loading}>
-                {loading ? 'Adding...' : 'Add Account'}
-            </button>
-        </div>
+    {#if busyLoginTool}
+        <div class="alert info">{loginProgress || 'Authenticating...'}</div>
     {/if}
 
-<div class="claude-note">
-    <span class="dot green"></span>
-    <p>Claude is authenticated via OpenClaude CLI — no credentials needed.</p>
-</div>
-
-{#if accounts.length === 0}
-    <p class="empty">No browser model accounts added yet.</p>
+    {#if loading}
+        <p class="empty">Loading account status...</p>
     {:else}
-        {#each Object.entries(grouped) as [model, accs]}
-            <div class="model-group">
-                <p class="group-label">{model}</p>
-                {#each accs as acc}
-                    <div class="account-row">
-                        <span
-                            class="status-dot"
-                            style="background: {statusColors[acc.status] || '#555'}"
-                        ></span>
-                        <div class="account-info">
-                            <span class="username">{acc.username}</span>
-                            <span class="status-text">{acc.status}</span>
+        <div class="provider-list">
+            {#each providers as provider}
+                <div class="provider-card {provider.authenticated ? 'connected' : ''}">
+                    <div class="provider-main">
+                        <div class="provider-title">
+                            <h3>{provider.name}</h3>
+                            <span class="badge {provider.authenticated ? 'active' : 'inactive'}">
+                                {statusLabel(provider)}
+                            </span>
                         </div>
-                        <button
-                            class="delete-btn"
-                            on:click={() => deleteAccount(acc.id)}
-                        >✕</button>
+                        <p class="provider-detail">{provider.detail}</p>
                     </div>
-                {/each}
-            </div>
-        {/each}
+
+                    {#if provider.authenticated}
+                        <button
+                            class="action-btn danger"
+                            on:click={() => handleLogout(provider)}
+                            disabled={busyLogoutTool === provider.logoutTool || !!busyLoginTool}
+                        >
+                            {busyLogoutTool === provider.logoutTool ? 'Logging out...' : 'Logout'}
+                        </button>
+                    {:else if provider.id === 'claude'}
+                        <div class="action-group">
+                            {#each provider.loginOptions as option}
+                                <button
+                                    class="action-btn {option.installed ? '' : 'ghost'}"
+                                    on:click={() => handleLogin(provider, option.tool)}
+                                    disabled={!!busyLoginTool || !!busyLogoutTool}
+                                >
+                                    {#if busyLoginTool === option.tool}
+                                        Logging in...
+                                    {:else if option.installed}
+                                        Login via {option.label}
+                                    {:else}
+                                        Setup {option.label}
+                                    {/if}
+                                </button>
+                            {/each}
+                        </div>
+                    {:else}
+                        <button class="action-btn" on:click={() => handleLogin(provider)} disabled={!!busyLoginTool || !!busyLogoutTool}>
+                            {busyLoginTool === provider.loginTool ? 'Logging in...' : loginButtonLabel(provider)}
+                        </button>
+                    {/if}
+                </div>
+            {/each}
+        </div>
+
+        <p class="hint">Logins run directly from this page. If a CLI is missing, the button opens Setup.</p>
     {/if}
 </div>
 
@@ -154,156 +383,182 @@
     .panel {
         display: flex;
         flex-direction: column;
-        gap: 12px;
-        padding: 16px;
+        gap: 16px;
+        padding: 24px;
         height: 100%;
         overflow-y: auto;
     }
 
-    .claude-note {
+    .panel-header {
         display: flex;
         align-items: center;
-        gap: 8px;
-        padding: 10px 12px;
-        background: #0f1f0f;
-        border: 1px solid #1a3a1a;
-        border-radius: 6px;
+        justify-content: space-between;
+        gap: 12px;
+    }
+
+    .panel-subtitle {
+        font-size: 13px;
+        color: var(--text-secondary);
+        margin-top: -6px;
+    }
+
+    .updated-at {
         font-size: 12px;
-        color: #3ecf8e;
+        color: var(--text-muted);
+        margin-top: -12px;
     }
-    
-    .dot {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        flex-shrink: 0;
-    }
-    
-    .dot.green { background: #3ecf8e; }
-        .panel-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
 
     h2 {
-        font-size: 14px;
-        font-weight: 500;
-        color: #fff;
+        font-size: 16px;
+        font-weight: 600;
+        color: var(--text-primary);
     }
 
-    .add-btn {
-        background: #1a1a3a;
-        border: 1px solid #2a2a5a;
-        color: #8888ff;
-        padding: 4px 10px;
+    .refresh-btn {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-medium);
+        color: var(--text-primary);
+        padding: 6px 12px;
         border-radius: 6px;
-        font-size: 12px;
+        font-size: 13px;
         cursor: pointer;
     }
 
-    .add-btn:hover { background: #22224a; }
+    .refresh-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
 
-    .form {
+    .provider-list {
         display: flex;
         flex-direction: column;
-        gap: 8px;
-        padding: 12px;
-        background: #161616;
-        border: 1px solid #2a2a2a;
-        border-radius: 8px;
+        gap: 10px;
     }
 
-    .form select,
-    .form input {
-        background: #0f0f0f;
-        border: 1px solid #2a2a2a;
-        border-radius: 6px;
-        color: #e8e8e8;
-        font-size: 13px;
-        padding: 8px 10px;
-        outline: none;
-        width: 100%;
+    .provider-card {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 14px 16px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-medium);
+        border-radius: 10px;
     }
 
-    .form select:focus,
-    .form input:focus { border-color: #3a3a5a; }
-
-    .submit-btn {
-        background: #1a1a3a;
-        border: 1px solid #2a2a5a;
-        color: #8888ff;
-        padding: 8px;
-        border-radius: 6px;
-        font-size: 13px;
-        cursor: pointer;
-        font-weight: 500;
+    .provider-card.connected {
+        border-color: var(--border-medium);
     }
 
-    .submit-btn:hover:not(:disabled) { background: #22224a; }
-    .submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-    .alert {
-        padding: 8px 12px;
-        border-radius: 6px;
-        font-size: 12px;
+    .provider-main {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 0;
     }
 
-    .alert.error { background: #2a1a1a; border: 1px solid #5a2a2a; color: #ff8888; }
-    .alert.success { background: #1a2a1a; border: 1px solid #2a5a2a; color: #88ff88; }
-
-    .empty {
-        font-size: 13px;
-        color: #444;
-        text-align: center;
-        margin-top: 20px;
-    }
-
-    .model-group { display: flex; flex-direction: column; gap: 6px; }
-
-    .group-label {
-        font-size: 11px;
-        color: #555;
-        text-transform: uppercase;
-        letter-spacing: 0.8px;
-    }
-
-    .account-row {
+    .provider-title {
         display: flex;
         align-items: center;
         gap: 10px;
-        padding: 8px 10px;
-        background: #161616;
-        border: 1px solid #2a2a2a;
-        border-radius: 6px;
     }
 
-    .status-dot {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        flex-shrink: 0;
+    h3 {
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin: 0;
     }
 
-    .account-info {
-        display: flex;
-        flex-direction: column;
-        flex: 1;
-        gap: 2px;
-    }
-
-    .username { font-size: 13px; color: #e8e8e8; }
-    .status-text { font-size: 11px; color: #555; }
-
-    .delete-btn {
-        background: transparent;
-        border: none;
-        color: #555;
+    .provider-detail {
         font-size: 12px;
-        cursor: pointer;
-        padding: 2px 6px;
-        border-radius: 4px;
+        color: var(--text-secondary);
+        margin: 0;
     }
 
-    .delete-btn:hover { color: #ff8888; background: #2a1a1a; }
+    .badge {
+        font-size: 11px;
+        padding: 3px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--border-medium);
+        background: var(--bg-tertiary);
+        white-space: nowrap;
+    }
+
+    .badge.active {
+        color: var(--accent-color);
+    }
+
+    .badge.inactive {
+        color: var(--text-muted);
+    }
+
+    .action-btn {
+        background: var(--text-primary);
+        border: none;
+        color: var(--bg-primary);
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        white-space: nowrap;
+    }
+
+    .action-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+    .action-btn.danger {
+        background: var(--bg-tertiary);
+        color: #ef4444;
+        border: 1px solid var(--border-medium);
+    }
+
+    .action-btn.ghost {
+        background: var(--bg-secondary);
+        color: var(--text-secondary);
+        border: 1px solid var(--border-medium);
+    }
+
+    .action-group {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .alert {
+        padding: 10px 12px;
+        border-radius: 8px;
+        font-size: 13px;
+        border: 1px solid var(--border-medium);
+        background: var(--bg-secondary);
+    }
+
+    .alert.error {
+        color: #ef4444;
+    }
+
+    .alert.success {
+        color: var(--accent-color);
+    }
+
+    .alert.info {
+        color: var(--text-secondary);
+    }
+
+    .empty {
+        font-size: 14px;
+        color: var(--text-muted);
+        text-align: center;
+        margin-top: 24px;
+    }
+
+    .hint {
+        font-size: 12px;
+        color: var(--text-muted);
+    }
 </style>

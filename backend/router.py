@@ -1,165 +1,235 @@
-from fastapi import APIRouter, HTTPException
+"""
+router.py — FreeHive v0.5.1
+"""
+
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-from typing import List, Optional
-from backend.session_manager import SessionManager
-from backend.account_store import add_account, get_accounts, remove_account
-from backend import conversation_manager as cm
+import logging
 
-router = APIRouter()
-session_manager = SessionManager()
+from backend.feature_flags import is_arena_enabled
 
+logger = logging.getLogger(__name__)
 
-# ── Request / Response models ─────────────────────────────────────────────────
+router = APIRouter()  # NO prefix here — main.py adds /api
+
 
 class ChatRequest(BaseModel):
     model: str
     message: str
-    session_id: str  # Required — create via POST /sessions first
-
-class ChatResponse(BaseModel):
-    model: str
-    response: str
     session_id: str
 
-class CreateSessionRequest(BaseModel):
+
+class SessionCreateRequest(BaseModel):
     model: str
 
-class CompareRequest(BaseModel):
-    models: List[str]
-    message: str
-    session_ids: dict  # {"claude": "uuid", "chatgpt": "uuid"}
+
+class ArenaStartRequest(BaseModel):
+    force_login: bool = False
 
 
-# ── Sessions ──────────────────────────────────────────────────────────────────
+def _is_arena_model(model: str | None) -> bool:
+    return str(model or "").strip().lower().startswith("arena/")
+
+
+def _require_arena_enabled() -> None:
+    if not is_arena_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+
 
 @router.post("/sessions")
-async def create_session(request: CreateSessionRequest):
-    """Create a new conversation session. Returns session_id to use in /chat."""
-    valid = ["claude", "chatgpt", "gemini"]
-    if request.model not in valid:
-        raise HTTPException(status_code=400, detail=f"Model must be one of {valid}")
-    session = cm.create_session(request.model)
-    return session
-
-@router.get("/sessions")
-async def list_sessions(model: Optional[str] = None):
-    """List all sessions, optionally filtered by model."""
-    sessions = cm.list_sessions(model)
-    return {"sessions": sessions}
-
-@router.get("/sessions/{session_id}")
-async def get_session(session_id: str):
-    session = cm.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    return session
-
-@router.get("/sessions/{session_id}/messages")
-async def get_messages(session_id: str):
-    """Get full message history for a session."""
-    session = cm.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    messages = cm.get_messages(session_id)
-    return {"session_id": session_id, "messages": messages}
-
-@router.delete("/sessions/{session_id}")
-async def delete_session(session_id: str):
-    session = cm.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    cm.delete_session(session_id)
-    return {"deleted": True}
-
-
-# ── Chat ──────────────────────────────────────────────────────────────────────
-
-@router.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def create_session(body: SessionCreateRequest, request: Request):
+    if _is_arena_model(body.model) and not is_arena_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+    sm = request.app.state.session_manager
+    cm = request.app.state.conversation_manager
     try:
-        response = await session_manager.send_message(
-            request.model,
-            request.message,
-            request.session_id,
-        )
-        return ChatResponse(
-            model=request.model,
-            response=response,
-            session_id=request.session_id,
-        )
+        db_session = cm.create_session(body.model)
+        session_id = db_session["id"]
+        sm.create_session(session_id, body.model)
+        messages = cm.get_messages(session_id)
+        if messages:
+            await sm.load_history(session_id, messages)
+        return {"id": session_id, "model": body.model}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.exception(f"[sessions] Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
-@router.get("/models")
-async def get_models():
-    return {
-        "models": [
-            {"name": "claude", "status": "active"},
-            {"name": "chatgpt", "status": "active"},
-            {"name": "gemini", "status": "active"},
-        ]
-    }
 
-@router.post("/compare")
-async def compare(request: CompareRequest):
-    import asyncio
+@router.get("/sessions")
+async def list_sessions(request: Request, model: str | None = None, source: str | None = None):
+    if _is_arena_model(model) and not is_arena_enabled():
+        return []
+    sessions = request.app.state.conversation_manager.list_sessions(model=model, source=source)
+    if not is_arena_enabled():
+        sessions = [row for row in sessions if not _is_arena_model(row.get("model"))]
+    return sessions
 
-    async def fetch(model):
-        session_id = request.session_ids.get(model)
-        if not session_id:
-            return model, f"Error: no session_id provided for {model}"
-        try:
-            response = await session_manager.send_message(model, request.message, session_id)
-            return model, response
-        except Exception as e:
-            return model, f"Error: {str(e)}"
 
-    results = await asyncio.gather(*[fetch(m) for m in request.models])
-    return {"results": dict(results)}
+@router.get("/sessions/{session_id}/messages")
+async def get_messages(session_id: str, request: Request):
+    cm = request.app.state.conversation_manager
+    session = cm.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if _is_arena_model(session.get("model")) and not is_arena_enabled():
+        raise HTTPException(status_code=404, detail="Session not found")
+    messages = cm.get_messages(session_id)
+    return messages
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(session_id: str, request: Request):
+    request.app.state.session_manager.delete_session(session_id)
+    request.app.state.conversation_manager.delete_session(session_id)
+    return {"status": "deleted"}
+
+
+@router.post("/chat")
+async def chat(body: ChatRequest, request: Request):
+    if _is_arena_model(body.model) and not is_arena_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+    sm = request.app.state.session_manager
+    cm = request.app.state.conversation_manager
+    try:
+        # If this session exists in DB but not memory (e.g., app restart or user loaded
+        # an older chat), recreate adapter and replay stored messages.
+        if sm.get_session(body.session_id) is None:
+            db_session = cm.get_session(body.session_id)
+            if not db_session:
+                raise ValueError(f"Session {body.session_id} not found")
+            if _is_arena_model(db_session.get("model")) and not is_arena_enabled():
+                raise ValueError(f"Session {body.session_id} not found")
+            sm.create_session(body.session_id, db_session["model"])
+            history = cm.get_messages(body.session_id)
+            if history:
+                await sm.load_history(body.session_id, history)
+
+        response = await sm.send_message(
+            session_id=body.session_id,
+            message=body.message,
+            conversation_manager=cm,
+        )
+        transport = None
+        session = sm.get_session(body.session_id)
+        if session:
+            adapter = session.get("adapter")
+            if adapter and hasattr(adapter, "get_last_transport"):
+                try:
+                    transport = adapter.get_last_transport()
+                except Exception:
+                    transport = None
+        return {"response": response, "transport": transport}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.exception(f"[chat] Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/chat/clear")
-async def clear_history(model: str = None):
-    if model:
-        session_manager.clear_history(model)
-    else:
-        session_manager.clear_all_history()
-    return {"cleared": True}
-
-
-# ── Accounts ──────────────────────────────────────────────────────────────────
-
-class AddAccountRequest(BaseModel):
-    model: str
-    username: str
-    password: str
-
-@router.post("/accounts")
-async def create_account(request: AddAccountRequest):
+async def clear_chat(request: Request, model: str | None = None):
+    sm = request.app.state.session_manager
+    cm = request.app.state.conversation_manager
     try:
-        account = add_account(request.model, request.username, request.password)
-        return account
+        if model:
+            cleared_mem = sm.clear_model_sessions(model)
+            db_sessions = cm.list_sessions(model=model)
+            for row in db_sessions:
+                sid = str(row.get("id", "")).strip()
+                if sid:
+                    cm.delete_session(sid)
+            return {
+                "status": "cleared",
+                "model": model,
+                "cleared_memory_sessions": cleared_mem,
+                "cleared_db_sessions": len(db_sessions),
+            }
+
+        cleared_mem = sm.clear_all_sessions()
+        db_sessions = cm.list_sessions()
+        for row in db_sessions:
+            sid = str(row.get("id", "")).strip()
+            if sid:
+                cm.delete_session(sid)
+        return {
+            "status": "cleared",
+            "model": None,
+            "cleared_memory_sessions": cleared_mem,
+            "cleared_db_sessions": len(db_sessions),
+        }
     except Exception as e:
+        logger.exception(f"[chat/clear] Failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to clear chat history")
+
+
+@router.get("/arena/status")
+async def arena_status(request: Request):
+    _require_arena_enabled()
+    am = request.app.state.arena_manager
+    if am is None:
+        raise HTTPException(status_code=503, detail="Arena manager unavailable")
+    status = am.get_status()
+    logged_in = await am.is_logged_in() if status["running"] else False
+    return {**status, "logged_in": logged_in}
+
+
+@router.post("/arena/start")
+async def arena_start(request: Request, body: ArenaStartRequest = None):
+    _require_arena_enabled()
+    if body is None:
+        body = ArenaStartRequest()
+    am = request.app.state.arena_manager
+    if am is None:
+        raise HTTPException(status_code=503, detail="Arena manager unavailable")
+    sm = request.app.state.session_manager
+    try:
+        result = await am.start(force_login=body.force_login)
+        sm.set_arena_manager(am)
+        return result
+    except Exception as e:
+        logger.exception(f"[arena/start] Failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/accounts")
-async def list_accounts(model: Optional[str] = None):
-    try:
-        accounts = get_accounts(model)
-        return {"accounts": accounts}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
-@router.delete("/accounts/{account_id}")
-async def delete_account(account_id: str):
+@router.post("/arena/stop")
+async def arena_stop(request: Request):
+    _require_arena_enabled()
+    am = request.app.state.arena_manager
+    if am is None:
+        raise HTTPException(status_code=503, detail="Arena manager unavailable")
+    await am.stop()
+    return {"status": "stopped"}
+
+
+@router.get("/arena/models")
+async def arena_models(request: Request):
+    _require_arena_enabled()
+    am = request.app.state.arena_manager
+    if am is None:
+        raise HTTPException(status_code=503, detail="Arena manager unavailable")
+    models = await am.get_models()
+    return {"models": models}
+
+
+@router.post("/arena/login")
+async def arena_force_login(request: Request):
+    _require_arena_enabled()
+    am = request.app.state.arena_manager
+    if am is None:
+        raise HTTPException(status_code=503, detail="Arena manager unavailable")
+    sm = request.app.state.session_manager
+    if am.get_status()["running"]:
+        await am.stop()
     try:
-        success = remove_account(account_id)
-        if not success:
-            raise HTTPException(status_code=404, detail="Account not found")
-        return {"success": True}
-    except HTTPException:
-        raise
+        result = await am.start(force_login=True)
+        sm.set_arena_manager(am)
+        return result
     except Exception as e:
+        logger.exception(f"[arena/login] Failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))

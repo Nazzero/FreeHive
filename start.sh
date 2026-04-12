@@ -1,45 +1,39 @@
-#!/usr/bin/env bash
-# FreeHive launcher — starts both the Python backend and the frontend dev server.
-set -e
+#!/bin/bash
+# FreeHive v0.5.3 start script
 
 cd "$(dirname "$0")"
 
-# ── Backend ───────────────────────────────────────────────────────────────────
-if [ ! -d "venv" ]; then
-    echo "ERROR: Python venv not found. Run: python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt"
-    exit 1
+# Launch Chrome with CDP enabled (for Arena adapter)
+# Skip if already running with debugging port
+if ! curl -s http://localhost:9222/json > /dev/null 2>&1; then
+    echo "[FreeHive] Launching Chrome with CDP on port 9222..."
+    /usr/bin/google-chrome \
+        --remote-debugging-port=9222 \
+        --user-data-dir=/home/nazmoney/.config/google-chrome \
+        --no-first-run \
+        --no-default-browser-check \
+        &
+    sleep 2
+    echo "[FreeHive] Chrome ready"
+else
+    echo "[FreeHive] Chrome CDP already running on port 9222"
 fi
 
+# Start backend
+echo "[FreeHive] Starting backend on port 7200..."
 source venv/bin/activate
-echo "Starting backend  →  http://localhost:8000"
-uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload &
+uvicorn backend.main:app --host 127.0.0.1 --port 7200 --reload &
 BACKEND_PID=$!
 
-# ── Frontend ──────────────────────────────────────────────────────────────────
-if [ ! -d "node_modules" ]; then
-    echo "node_modules not found — running npm install first..."
-    npm install
-fi
-
-echo "Starting frontend →  http://localhost:5173"
+# Start frontend
+echo "[FreeHive] Starting frontend on port 1420..."
 npm run dev &
 FRONTEND_PID=$!
 
-# ── Info ──────────────────────────────────────────────────────────────────────
+echo "[FreeHive] All services started"
+echo "  Frontend: http://localhost:1420"
+echo "  Backend:  http://localhost:7200"
 echo ""
-echo "FreeHive is running."
-echo "  Open http://localhost:5173 in your browser."
-echo ""
-echo "Press Ctrl+C to stop everything."
+echo "Press Ctrl+C to stop all services"
 
-# ── Cleanup on exit ───────────────────────────────────────────────────────────
-cleanup() {
-    echo ""
-    echo "Stopping FreeHive..."
-    kill "$BACKEND_PID" "$FRONTEND_PID" 2>/dev/null || true
-    wait "$BACKEND_PID" "$FRONTEND_PID" 2>/dev/null || true
-    echo "Done."
-}
-
-trap cleanup INT TERM
-wait
+wait $BACKEND_PID $FRONTEND_PID
