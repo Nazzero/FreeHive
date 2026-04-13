@@ -2,6 +2,7 @@
 
 FreeHive is a local-first desktop app that works like a **universal remote for AI**.
 
+
 Instead of managing separate apps and separate chat histories for Claude, ChatGPT, and Gemini, you use one interface and one local conversation store.
 
 ## What FreeHive Does
@@ -27,13 +28,13 @@ Benefits:
 ## How It Works (Simple)
 
 FreeHive has 3 layers:
-
+remove this!
 1. Frontend (`Svelte + Tauri`)  
 2. Backend (`FastAPI`)
 3. Provider adapters (`backend/adapters/*`)
 
 Flow:
-
+remove this
 1. You send a prompt from the app (or API client)
 2. Backend picks the correct adapter (Claude/ChatGPT/Gemini)
 3. Response comes back and is stored in local DB
@@ -109,7 +110,7 @@ Open:
 ## Build Desktop Installers
 
 Build must run on the target OS:
-
+remove
 - Windows machine for Windows installer
 - macOS machine for macOS installer
 - Linux machine for Linux packages
@@ -121,13 +122,13 @@ npm run tauri build
 ```
 
 This build now includes:
-
+remove
 - Frontend build
 - Backend sidecar build (`freehive-backend` / `freehive-backend.exe`)
 - Tauri bundle creation
 
 If you only want Linux `.deb` + `.rpm`:
-
+remove
 ```bash
 npm run tauri build -- --bundles deb,rpm
 ```
@@ -147,13 +148,13 @@ FreeHive includes compatibility endpoints:
 ### API Keys
 
 In FreeHive app:
-
+already said
 1. Go to **Settings**
 2. Open **API Keys**
 3. Copy a key for the model you want
 
 Recommended key format:
-
+redundant
 - `freehive-<model-id>`  
   Example: `freehive-gpt-5.2`, `freehive-claude-sonnet-4-5`
 
@@ -231,14 +232,14 @@ Planned next additions:
   - Add API-key routing support (`freehive-qwen` and model-specific `freehive-qwen-*`)
 
 ## Troubleshooting
-
+remove
 - Backend unreachable: verify backend is running on `127.0.0.1:7200`
 - No models in UI: authenticate at least one provider in **Accounts**
 - Tauri build fails on sidecar: install PyInstaller in your Python environment
 - Linux AppImage errors: use `--bundles deb,rpm` unless AppImage tooling is installed
 
 ## Key Project Paths
-
+remove
 - Backend app entry: `backend/main.py`
 - Core API routes: `backend/router.py`
 - Compat API routes: `backend/compat_router.py`
