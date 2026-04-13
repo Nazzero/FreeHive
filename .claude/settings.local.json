@@ -29,7 +29,16 @@
       "Bash(cmd.exe /c \"wmic process where ProcessId=488024 delete\")",
       "Bash(cmd.exe /c \"wmic process where ProcessId=734568 delete\")",
       "Bash(powershell -NoProfile -Command \"Stop-Process -Id 488024, 734568 -Force -ErrorAction SilentlyContinue; Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force; Write-Host 'done'\")",
-      "Bash(cat /c/Users/nasse/FreeHive/src-tauri/capabilities/*.json)"
+      "Bash(cat /c/Users/nasse/FreeHive/src-tauri/capabilities/*.json)",
+      "Bash(git rm:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git config:*)",
+      "Bash(git remote:*)",
+      "Bash(git branch:*)",
+      "Bash(git push:*)",
+      "Bash(git pull:*)",
+      "Bash(git checkout:*)",
+      "Bash(git add:*)"
     ]
   }
 }

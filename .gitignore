@@ -18,6 +18,11 @@ venv/
 # Tauri / Rust
 /src-tauri/target/
 /dist/
+/build/
+
+# Sidecar binaries (built from source, platform-specific)
+src-tauri/sidecar/freehive-backend
+src-tauri/sidecar/freehive-backend.exe
 
 # Logs
 *.log
