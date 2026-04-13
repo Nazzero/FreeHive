@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo --version)",
+      "Bash(rustup --version)",
+      "Bash(ls /c/Users/nasse/FreeHive/src-tauri/sidecar/freehive-backend*)",
+      "Bash(/c/Users/nasse/FreeHive/venv/Scripts/python.exe -c \"import PyInstaller; print\\('PyInstaller:', PyInstaller.__version__\\)\")",
+      "Bash(venv/Scripts/pip install:*)",
+      "Bash(cmd.exe /c \"C:\\\\Users\\\\nasse\\\\FreeHive\\\\src-tauri\\\\sidecar\\\\freehive-backend.exe\")",
+      "Bash(curl -s http://127.0.0.1:7200/)",
+      "Bash(cmd.exe /c start /B \"freehive-backend\" \"C:\\\\Users\\\\nasse\\\\FreeHive\\\\src-tauri\\\\sidecar\\\\freehive-backend.exe\")",
+      "Bash(venv/Scripts/python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 7200)",
+      "Bash(venv/Scripts/python.exe -c \"from backend.main import app; print\\('Import OK'\\)\")",
+      "Bash(curl -s http://127.0.0.1:7200/api/setup/status)",
+      "Bash(taskkill /F /IM python.exe)",
+      "Bash(taskkill /F /IM freehive-backend.exe)",
+      "Bash(npm run:*)",
+      "Bash(cmd.exe /c start /B \"\" \"C:\\\\Users\\\\nasse\\\\FreeHive\\\\dist\\\\freehive-backend.exe\")",
+      "Bash(netstat -ano)",
+      "Bash(cmd.exe /c netstat -ano)",
+      "Bash(findstr \":7200\")",
+      "Bash(cmd.exe /c taskkill /F /PID 734568)",
+      "Bash(tasklist)",
+      "Bash(taskkill /F /PID 488024 /PID 734568)",
+      "Bash(cmd.exe /c \"taskkill /F /PID 488024 & taskkill /F /PID 734568 & taskkill /F /IM freehive-backend.exe\")",
+      "Bash(cmd.exe /c \"taskkill /F /PID 488024 && taskkill /F /PID 734568\")",
+      "Bash(cmd.exe /c \"taskkill /F /T /PID 488024\")",
+      "Bash(cmd.exe /c \"taskkill /F /T /PID 734568\")",
+      "Bash(cmd.exe /c \"wmic process where ProcessId=488024 delete\")",
+      "Bash(cmd.exe /c \"wmic process where ProcessId=734568 delete\")",
+      "Bash(powershell -NoProfile -Command \"Stop-Process -Id 488024, 734568 -Force -ErrorAction SilentlyContinue; Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force; Write-Host 'done'\")",
+      "Bash(cat /c/Users/nasse/FreeHive/src-tauri/capabilities/*.json)"
+    ]
+  }
+}

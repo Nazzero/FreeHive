@@ -1,0 +1,6 @@
+fastapi==0.135.3
+uvicorn==0.43.0
+httpx==0.28.1
+cryptography==46.0.6
+pydantic==2.12.5
+websockets==16.0
