@@ -399,6 +399,8 @@ From the code, `authLog[provider.id]` is populated with messages, but there's no
 
 ---
 
+### NOTE: ARENA IS MEANT TO BE OFF SO UNTIL THE OTHERS WORK.
+
 ### HIDDEN BUG A — `chatgpt_cli` is NEVER persisted as `selected_tool`
 
 **File:** `backend/setup_router.py` line 498-499
