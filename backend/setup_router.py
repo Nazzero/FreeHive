@@ -718,10 +718,17 @@ async def start_auth(tool: str):
                 except Exception:
                     pass
         else:
+            # Windows fallback: no PTY available — use pipes instead
+            env = os.environ.copy()
+            if is_gemini:
+                env["TERM"] = "dumb"
+
             process = await asyncio.create_subprocess_exec(
                 *auth_cmd,
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                env=env,
             )
             try:
                 while True:
@@ -753,6 +760,15 @@ async def start_auth(tool: str):
                         clean = _strip_ansi(chunk.decode(errors="replace")).strip()
                         if clean:
                             output_buf += f"{clean}\n"
+
+                            # Auto-answer Y/n prompts (Gemini CLI asks before opening browser)
+                            if re.search(r"\[Y/n\]", output_buf) and process.stdin:
+                                try:
+                                    process.stdin.write(b"Y\n")
+                                    await process.stdin.drain()
+                                except Exception:
+                                    pass
+
                             url_match = re.search(url_pattern, output_buf)
                             if url_match and not browser_opened:
                                 url = url_match.group(0).rstrip(".,);'\"")
