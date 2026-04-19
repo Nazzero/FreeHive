@@ -578,7 +578,33 @@ async def start_auth(tool: str):
     # Gemini CLI has no "auth login" — it auto-prompts on startup when not authenticated.
     # Passing a no-op prompt triggers auth check without entering interactive TUI.
     if is_gemini:
-        auth_cmd = [binary_path, "--prompt", "echo authenticated"]
+        # Pre-select OAuth method so the CLI commits to the flow instead of
+        # sitting on an interactive picker, then nudge it to run a trivial
+        # prompt which fails fast and triggers the OAuth URL print.
+        try:
+            gemini_dir = Path.home() / ".gemini"
+            gemini_dir.mkdir(parents=True, exist_ok=True)
+            settings_path = gemini_dir / "settings.json"
+            existing = {}
+            if settings_path.exists():
+                try:
+                    existing = json.loads(settings_path.read_text(encoding="utf-8"))
+                except Exception:
+                    existing = {}
+            if existing.get("selectedAuthType") != "oauth-personal":
+                existing["selectedAuthType"] = "oauth-personal"
+                settings_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.warning("Could not pre-write gemini settings.json: %s", e)
+
+        if IS_WINDOWS:
+            # Use cmd.exe so the .cmd wrapper runs correctly. Single-word
+            # prompt with `=` avoids nested-quote mangling by cmd.exe.
+            quoted = binary_path if " " not in binary_path else f'"{binary_path}"'
+            auth_cmd_str = f"{quoted} --prompt=hi"
+            auth_cmd = ["cmd", "/c", auth_cmd_str]
+        else:
+            auth_cmd = [binary_path, "--prompt", "hi"]
     else:
         auth_cmd = [binary_path, "auth", "login"]
     # URL pattern to detect and open in browser
@@ -633,6 +659,7 @@ async def start_auth(tool: str):
             env = os.environ.copy()
             if is_gemini:
                 env["TERM"] = "dumb"
+                env["GOOGLE_GENAI_USE_GCA"] = "true"
 
             process = await asyncio.create_subprocess_exec(
                 *auth_cmd,
@@ -722,6 +749,7 @@ async def start_auth(tool: str):
             env = os.environ.copy()
             if is_gemini:
                 env["TERM"] = "dumb"
+                env["GOOGLE_GENAI_USE_GCA"] = "true"
 
             process = await asyncio.create_subprocess_exec(
                 *auth_cmd,
@@ -752,7 +780,7 @@ async def start_auth(tool: str):
 
                     chunk = b""
                     try:
-                        chunk = await asyncio.wait_for(process.stdout.readline(), timeout=0.8)
+                        chunk = await asyncio.wait_for(process.stdout.read(4096), timeout=0.8)
                     except asyncio.TimeoutError:
                         chunk = b""
 
