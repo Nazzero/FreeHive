@@ -6,6 +6,9 @@
     const BASE_URL = API_BASE_URL;
     const APP_VERSION = '0.6.0';
 
+    /** When true, don't auto-dispatch 'ready' on mount (used when opened from Accounts). */
+    export let skipAutoReady = false;
+
     // ── Provider definitions ──────────────────────────────────────────────
     /** @type {Record<string, any>} */
     const PROVIDERS = {
@@ -90,7 +93,7 @@
                 const res = await fetch(`${BASE_URL}/setup/status`);
                 status = await res.json();
 
-                if (status.ready) {
+                if (status.ready && !skipAutoReady) {
                     dispatch('ready', { tool: status.selected_tool });
                 }
                 loading = false;
