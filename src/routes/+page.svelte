@@ -816,7 +816,7 @@
                 on:modelsChanged={refreshModels}
                 on:close={() => activeView = 'chat'} />
         {:else if activeView === 'setup'}
-            <SetupScreen on:ready={(e) => { onSetupReady(e); activeView = 'chat'; }} />
+            <SetupScreen skipAutoReady={true} on:ready={(e) => { onSetupReady(e); activeView = 'chat'; }} />
         {:else if activeView === 'settings'}
             <SettingsPage on:close={() => activeView = 'chat'} on:history-cleared={async () => { await refreshSavedSessions(); handleNewChat(); activeView = 'chat'; }} />
         {/if}
