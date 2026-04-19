@@ -569,3 +569,9 @@ MIT License. See [LICENSE](LICENSE) for details.
 <p align="center">
   <strong>FreeHive</strong> — Your AI, your machine, your rules.
 </p>
+
+---
+
+<p align="center">
+  <sub><strong>Disclaimer:</strong> Use at your own risk. FreeHive is provided as-is with no warranties. The authors are not responsible for any consequences arising from the use of this software.</sub>
+</p>
