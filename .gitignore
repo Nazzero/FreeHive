@@ -12,6 +12,7 @@ vite.config.ts.timestamp-*
 # Python
 __pycache__/
 *.py[cod]
+*.pyo
 venv/
 .venv/
 
@@ -24,7 +25,40 @@ venv/
 src-tauri/sidecar/freehive-backend
 src-tauri/sidecar/freehive-backend.exe
 
+# Bundled extension (copied from arena_extension/ during build)
+src-tauri/extensions/
+
 # Logs
 *.log
 
-venv/
+# AI tooling (local-only)
+.claude/
+.ocr/
+.code-review-graph/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+
+# Handoff / dev docs (internal)
+Handoff_Docs/
+handoff_docs/
+HANDOFF-*.md
+
+# Dev-only scripts and files
+fix.cjs
+fix2.cjs
+install.cmd
+start.sh
+test_regex.py
+stress_tests.md
+LMArenaBridge
+
+# Build artifacts
+arena_extension_store.zip
+
+# Tests (not needed to compile)
+tests/
+docs/
+
+# IDE
+.vscode/

@@ -22,6 +22,7 @@ BLOCKING_STATUSES = {
     "invalid_not_found",
     "invalid_not_permitted",
     "invalid_private_direct",
+    "invalid_not_available",  # 400 "not available for user selection"
 }
 
 
@@ -107,12 +108,19 @@ class ArenaModelHealthStore:
                     return f"Arena model '{key}' cannot be used for conversational chat right now. Refresh models and choose another model."
                 if status == "invalid_private_direct":
                     return f"Arena model '{key}' is private/battle-only and cannot be used in Direct mode. Choose another model."
+                if status == "invalid_not_available":
+                    return f"Arena model '{key}' is not available for user selection. Refresh models and choose another model."
             if status == "cooldown":
                 cooldown_until = self._parse_iso(entry.get("cooldown_until"))
                 if cooldown_until and cooldown_until > _utc_now():
                     remaining = int((cooldown_until - _utc_now()).total_seconds())
                     return f"Arena model '{key}' is rate-limited. Try again in about {max(remaining, 1)} seconds."
             return ""
+
+    def get_all(self) -> dict[str, Any]:
+        """Return a copy of the full health state (slug → entry dict)."""
+        with self._lock:
+            return {k: dict(v) for k, v in self._state.get("models", {}).items() if isinstance(v, dict)}
 
     def filter_and_rank(self, models: list[str], unknown_cap: int | None = None) -> list[str]:
         cleaned: list[str] = []
@@ -180,6 +188,8 @@ class ArenaModelHealthStore:
             return {"status": "invalid_not_found", "cooldown_until": ""}
         if status_code == 422 and ("not permitted" in text or "choose another model" in text):
             return {"status": "invalid_not_permitted", "cooldown_until": ""}
+        if status_code == 400 and "not available for user selection" in text:
+            return {"status": "invalid_not_available", "cooldown_until": ""}
         if status_code == 400 and "private models" in text:
             return {"status": "invalid_private_direct", "cooldown_until": ""}
         if status_code == 429:

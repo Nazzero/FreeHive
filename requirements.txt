@@ -4,3 +4,6 @@ httpx==0.28.1
 cryptography==46.0.6
 pydantic==2.12.5
 websockets==16.0
+playwright>=1.44.0
+cloakbrowser>=0.3.25
+pyinstaller>=6.0

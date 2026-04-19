@@ -4,6 +4,6 @@
   "path": "/home/nazmoney/Ilee_AI/native_host/host.py",
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://<EXTENSION_ID_PLACEHOLDER>/"
+    "chrome-extension://jkclihigpeefogblifghhpojgkbheked/"
   ]
 }

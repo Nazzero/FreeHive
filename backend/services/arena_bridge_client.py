@@ -256,7 +256,7 @@ class ArenaBridgeClient:
         if event_type in {"job_complete"}:
             result_payload = event.get("result") if isinstance(event.get("result"), dict) else {}
             result = ArenaBridgeResult.from_payload(result_payload)
-            return {
+            mapped: dict[str, Any] = {
                 "type": "JOB_COMPLETE",
                 "job_id": job_id,
                 "full_text": result.text,
@@ -265,6 +265,9 @@ class ArenaBridgeClient:
                 "raw_event_count": result.raw_event_count,
                 "metadata": result.metadata,
             }
+            if result.tool_calls:
+                mapped["tool_calls"] = result.tool_calls
+            return mapped
 
         if event_type in {"job_failed", "job_error"}:
             error_payload = event.get("error") if isinstance(event.get("error"), dict) else {}

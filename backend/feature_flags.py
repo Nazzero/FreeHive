@@ -7,7 +7,7 @@ def _is_truthy(value: str) -> bool:
 
 def is_arena_enabled() -> bool:
     """
-    Arena is intentionally OFF by default until v2.
-    Set FREEHIVE_ENABLE_ARENA=1 to re-enable during development.
+    Arena (extension bridge + CloakBrowser fallback) is ON by default.
+    Set FREEHIVE_ENABLE_ARENA=0 to disable.
     """
-    return _is_truthy(os.getenv("FREEHIVE_ENABLE_ARENA", "0"))
+    return _is_truthy(os.getenv("FREEHIVE_ENABLE_ARENA", "1"))

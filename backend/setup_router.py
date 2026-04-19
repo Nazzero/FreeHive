@@ -11,9 +11,13 @@ import time
 import webbrowser
 from pathlib import Path
 
-from fastapi import APIRouter
+import logging
+
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 try:
     import fcntl  # type: ignore
@@ -43,12 +47,14 @@ INSTALL_COMMANDS = {
     "openclaude": "npm install -g @gitlawb/openclaude",
     "claude_code": "npm install -g @anthropic-ai/claude-code",
     "gemini_cli": "npm install -g @google/gemini-cli",
+    "chatgpt_cli": "npm install -g @openai/codex",
 }
 
 CLI_BINARIES = {
     "openclaude": "openclaude",
     "claude_code": "claude",
     "gemini_cli": "gemini",
+    "chatgpt_cli": "codex",
 }
 
 AUTH_BINARIES = {
@@ -201,7 +207,11 @@ def _read_gemini_auth_status() -> dict:
 def _decode_chatgpt_tier(token: str) -> str:
     try:
         payload = _decode_jwt_payload(token)
-        return payload.get("chatgpt_plan_type", "unknown")
+        tier = payload.get("chatgpt_plan_type")
+        if not tier:
+            auth_claim = payload.get("https://api.openai.com/auth", {})
+            tier = auth_claim.get("chatgpt_plan_type")
+        return tier or "unknown"
     except Exception:
         return "unknown"
 
@@ -272,6 +282,65 @@ def _set_selected_tool(tool: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Thinking effort config
+# ---------------------------------------------------------------------------
+
+class ThinkingEffortRequest(BaseModel):
+    thinking_effort: str
+
+@setup_router.get("/setup/thinking-effort")
+async def get_thinking_effort():
+    """Read default thinking effort from config."""
+    config = _read_config()
+    return {"thinking_effort": config.get("thinking_effort", "off")}
+
+@setup_router.post("/setup/thinking-effort")
+async def set_thinking_effort(body: ThinkingEffortRequest):
+    """Persist default thinking effort to ~/.freehive/config.json."""
+    from backend.thinking import VALID_EFFORTS
+    if body.thinking_effort not in VALID_EFFORTS:
+        return {"success": False, "error": f"Invalid effort: {body.thinking_effort}. Use: off, low, medium, high"}
+    config = _read_config()
+    config["thinking_effort"] = body.thinking_effort
+    _write_config(config)
+    return {"success": True, "thinking_effort": body.thinking_effort}
+
+
+# ---------------------------------------------------------------------------
+# Usage
+# ---------------------------------------------------------------------------
+
+@setup_router.get("/setup/usage")
+async def get_usage(request: Request):
+    """Fetch live quota/usage from all providers + arena context tracking."""
+    from backend.usage_fetcher import (
+        fetch_claude_usage, fetch_chatgpt_usage, fetch_gemini_usage,
+        fetch_arena_context_usage,
+    )
+    claude, chatgpt, gemini = await asyncio.gather(
+        fetch_claude_usage(),
+        fetch_chatgpt_usage(),
+        fetch_gemini_usage(),
+        return_exceptions=True,
+    )
+    providers = {}
+    for result in [claude, chatgpt, gemini]:
+        if isinstance(result, Exception):
+            continue
+        providers[result["provider"]] = result
+
+    arena_sessions = []
+    try:
+        sm = getattr(request.app.state, "session_manager", None)
+        cm = getattr(request.app.state, "conversation_manager", None)
+        arena_sessions = await fetch_arena_context_usage(sm, cm)
+    except Exception as exc:
+        logger.warning("[usage] Arena context fetch failed: %s", exc)
+
+    return {"providers": providers, "arena_sessions": arena_sessions}
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -286,13 +355,40 @@ async def get_setup_status():
     codex_ok = _is_installed("codex")
     auth = _read_auth_status()
     gemini_auth = _read_gemini_auth_status()
+
+    # Auto-refresh expired Gemini token so the UI doesn't falsely show disconnected
+    if gemini_auth.get("authenticated") and gemini_auth.get("expired"):
+        try:
+            from backend.adapters.gemini_direct_adapter import GeminiDirectAdapter
+            await GeminiDirectAdapter()._get_token()
+            gemini_auth = _read_gemini_auth_status()
+        except Exception:
+            pass
+
     chatgpt_auth = _read_chatgpt_auth_status()
     authed = auth["authenticated"]
     selected_tool = _get_selected_tool()
 
     gemini_ready = gemini_auth["authenticated"] and not gemini_auth["expired"]
     chatgpt_ready = chatgpt_auth["authenticated"]
-    selected_tool_ready = selected_tool is not None or chatgpt_ready
+    any_provider_ready = authed or gemini_ready or chatgpt_ready
+
+    # Arena status (extension bridge or CloakBrowser)
+    browser_available = False
+    arena_logged_in = False
+    try:
+        from backend.services.arena_bridge_transport import is_bridge_available
+        if is_bridge_available():
+            browser_available = True
+            arena_logged_in = True  # Extension = user's Chrome = already logged in
+        else:
+            from backend.adapters.arena_steel_adapter import ArenaSteelAdapter
+            _tmp_adapter = ArenaSteelAdapter()
+            browser_available = await _tmp_adapter.is_available()
+            if browser_available:
+                arena_logged_in = await _tmp_adapter.is_authenticated()
+    except Exception:
+        pass
 
     return {
         "prerequisites": {
@@ -319,6 +415,7 @@ async def get_setup_status():
         "gemini_cli": {
             "installed": gemini_ok,
             "authenticated": gemini_auth["authenticated"] and not gemini_auth["expired"],
+            "tier": _read_config().get("model_discovery", {}).get("gemini", {}).get("tier"),
             "account_email": gemini_auth["account_email"],
             "account_name": gemini_auth["account_name"],
             "account_label": gemini_auth["account_label"],
@@ -332,7 +429,14 @@ async def get_setup_status():
             "account_label": chatgpt_auth["account_label"],
         },
         "selected_tool": selected_tool,
-        "ready": (authed or gemini_ready or chatgpt_ready) and selected_tool_ready,
+        "ready": any_provider_ready,
+        "arena": {
+            "steel_available": browser_available,
+            "browser_available": browser_available,
+            "authenticated": arena_logged_in,
+            "viewer_url": None,
+            "backend": "cloakbrowser",
+        },
     }
 
 
@@ -357,6 +461,23 @@ async def logout_tool(tool: str):
         if creds_file.exists():
             creds_file.unlink()
             removed = True
+
+        # Gemini: also clear active account so CLI doesn't auto-reauthenticate
+        if tool_key in ("gemini_cli", "gemini"):
+            accounts_file = GEMINI_CREDENTIALS_FILE.parent / "google_accounts.json"
+            if accounts_file.exists():
+                try:
+                    accounts = json.loads(accounts_file.read_text())
+                    if accounts.get("active"):
+                        old = accounts.get("old", [])
+                        active = accounts.pop("active")
+                        if active and active not in old:
+                            old.append(active)
+                        accounts["old"] = old
+                        accounts_file.write_text(json.dumps(accounts, indent=2))
+                except Exception:
+                    pass
+
         return {"success": True, "tool": tool_key, "removed": removed}
     except Exception as exc:
         return {"success": False, "tool": tool_key, "error": str(exc)}
@@ -453,8 +574,13 @@ async def start_auth(tool: str):
         if is_chatgpt
         else CREDENTIALS_FILE
     )
-    # Use explicit auth subcommand for all CLIs.
-    auth_cmd = [binary_path, "auth", "login"]
+    # Use explicit auth subcommand for CLIs that support it.
+    # Gemini CLI has no "auth login" — it auto-prompts on startup when not authenticated.
+    # Passing a no-op prompt triggers auth check without entering interactive TUI.
+    if is_gemini:
+        auth_cmd = [binary_path, "--prompt", "echo authenticated"]
+    else:
+        auth_cmd = [binary_path, "auth", "login"]
     # URL pattern to detect and open in browser
     url_pattern = (
         r"https://[^\s\x00-\x1f]+accounts\.google[^\s\x00-\x1f]*"
@@ -496,12 +622,17 @@ async def start_auth(tool: str):
             )
 
         def _persist_selected_tool() -> bool:
-            return tool in ("openclaude", "claude_code", "gemini_cli")
+            return tool in ("openclaude", "claude_code", "gemini_cli", "chatgpt_cli")
 
         if HAS_PTY_SUPPORT:
             master_fd, slave_fd = pty.openpty()
             flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
             fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+            # TERM=dumb suppresses Gemini CLI's ink TUI while keeping PTY
+            env = os.environ.copy()
+            if is_gemini:
+                env["TERM"] = "dumb"
 
             process = await asyncio.create_subprocess_exec(
                 *auth_cmd,
@@ -510,6 +641,7 @@ async def start_auth(tool: str):
                 stderr=slave_fd,
                 close_fds=True,
                 preexec_fn=os.setsid,
+                env=env,
             )
             os.close(slave_fd)
 
@@ -538,6 +670,13 @@ async def start_auth(tool: str):
                         if chunk:
                             clean = _strip_ansi(chunk.decode(errors="replace"))
                             output_buf += clean
+
+                            # Auto-answer Y/n prompts (Gemini CLI asks before opening browser)
+                            if re.search(r"\[Y/n\]", output_buf):
+                                try:
+                                    os.write(master_fd, b"Y\n")
+                                except OSError:
+                                    pass
 
                             url_match = re.search(url_pattern, output_buf)
                             if url_match and not browser_opened:
@@ -687,6 +826,75 @@ async def start_auth(tool: str):
 # ---------------------------------------------------------------------------
 # Model discovery endpoint
 # ---------------------------------------------------------------------------
+
+@setup_router.get("/setup/arena/status")
+async def get_arena_steel_status(request: Request):
+    """Check Arena transport availability (extension bridge or CloakBrowser)."""
+    try:
+        am = getattr(request.app.state, "arena_manager", None)
+        if am is None:
+            return {
+                "steel_available": False, "browser_available": False,
+                "bridge_active": False, "transport": "offline",
+                "authenticated": False, "account": None, "viewer_url": None,
+            }
+
+        mgr_status = am.get_status()
+        transport = mgr_status.get("transport", "offline")
+        bridge_active = mgr_status.get("bridge_active", False)
+
+        # Extension bridge: user's Chrome handles auth
+        if bridge_active:
+            return {
+                "steel_available": True, "browser_available": True,
+                "bridge_active": True, "transport": "extension",
+                "authenticated": True, "account": None, "viewer_url": None,
+            }
+
+        # CloakBrowser fallback
+        adapter = am.get_adapter()
+        browser_available = False
+        account_info = {"logged_in": False}
+
+        if adapter is not None and hasattr(adapter, "is_available"):
+            browser_available = await adapter.is_available()
+            if browser_available and hasattr(adapter, "get_account_info"):
+                if getattr(am, "_login_session_active", False):
+                    account_info = await adapter.get_account_info()
+                    import os
+                    want_headless = os.getenv("ARENA_HEADED", "").strip() not in ("1", "true", "yes")
+                    if account_info.get("logged_in") and want_headless:
+                        try:
+                            await adapter.close()
+                            import asyncio
+                            await asyncio.sleep(1)
+                            adapter._orchestrator._headless = True
+                            am._login_session_active = False
+                            logger.info("[arena/status] Login confirmed, switched to headless")
+                        except Exception:
+                            pass
+                    elif account_info.get("logged_in"):
+                        am._login_session_active = False
+                else:
+                    account_info = await adapter.get_account_info()
+
+        return {
+            "steel_available": browser_available,
+            "browser_available": browser_available,
+            "bridge_active": False,
+            "transport": "cloakbrowser" if browser_available else "offline",
+            "authenticated": account_info.get("logged_in", False),
+            "account": account_info if account_info.get("logged_in") else None,
+            "viewer_url": None,
+        }
+    except Exception as exc:
+        return {
+            "steel_available": False, "browser_available": False,
+            "bridge_active": False, "transport": "offline",
+            "authenticated": False, "account": None, "viewer_url": None,
+            "error": str(exc),
+        }
+
 
 @setup_router.get("/setup/models")
 async def get_available_models(refresh: bool = False):

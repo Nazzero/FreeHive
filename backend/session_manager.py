@@ -179,19 +179,9 @@ class SessionManager:
         """
         m = model.lower()
 
-        if m == "claude" or m.startswith("claude-"):
-            from backend.adapters.claude_direct_adapter import ClaudeDirectAdapter
-            return ClaudeDirectAdapter(model=None if m == "claude" else model)
-
-        elif m == "chatgpt" or any(m.startswith(p) for p in ("gpt-", "o1-", "o3-", "o4-", "codex-")) or m in ("gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2-codex"):
-            from backend.adapters.chatgpt_direct_adapter import ChatGPTDirectAdapter
-            return ChatGPTDirectAdapter(model=None if m == "chatgpt" else model)
-
-        elif m == "gemini" or m.startswith("gemini-"):
-            from backend.adapters.gemini_direct_adapter import GeminiDirectAdapter
-            return GeminiDirectAdapter(model=None if m == "gemini" else model)
-
-        elif model.startswith("arena/"):
+        # Arena models MUST be checked first — arena model names like
+        # "arena/claude-sonnet-4-6-vertex" would otherwise match "claude-*"
+        if model.startswith("arena/") or m.startswith("arena/"):
             if not self._arena_enabled:
                 raise RuntimeError("Arena is disabled in this build.")
             # All arena/* sessions share the single Playwright Chromium context.
@@ -208,6 +198,18 @@ class SessionManager:
                     "Ensure Chrome is open with the FreeHive extension and an Arena tab active."
                 )
             return adapter
+
+        elif m == "claude" or m.startswith("claude-"):
+            from backend.adapters.claude_direct_adapter import ClaudeDirectAdapter
+            return ClaudeDirectAdapter(model=None if m == "claude" else model)
+
+        elif m == "chatgpt" or any(m.startswith(p) for p in ("gpt-", "o1-", "o3-", "o4-", "codex-")) or m in ("gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2-codex"):
+            from backend.adapters.chatgpt_direct_adapter import ChatGPTDirectAdapter
+            return ChatGPTDirectAdapter(model=None if m == "chatgpt" else model)
+
+        elif m == "gemini" or m.startswith("gemini-"):
+            from backend.adapters.gemini_direct_adapter import GeminiDirectAdapter
+            return GeminiDirectAdapter(model=None if m == "gemini" else model)
 
         else:
             raise ValueError(f"Unknown model: '{model}'")

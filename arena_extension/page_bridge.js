@@ -176,6 +176,17 @@
     return walk(frame, 0);
   }
 
+  function extractToolCalls(frame) {
+    if (!frame || typeof frame !== "object") return null;
+    if (Array.isArray(frame.choices) && frame.choices.length) {
+      const c = frame.choices[0];
+      if (c && c.delta && Array.isArray(c.delta.tool_calls) && c.delta.tool_calls.length) {
+        return c.delta.tool_calls;
+      }
+    }
+    return null;
+  }
+
   function extractError(frame) {
     if (!frame) {
       return null;
@@ -515,79 +526,80 @@
     return map;
   }
 
-  function getAvailableModelNames() {
-    const names = new Set();
-    const canonicalToOriginal = new Map();
-    const addName = (value, { strict = false } = {}) => {
-      const cleaned = String(value || "").trim();
-      if (!cleaned) {
-        return;
+  async function getAvailableModelNames() {
+    // Strategy 1: Click the model picker and read what the dropdown actually shows.
+    // This is the ground truth — exactly what the user sees in Direct mode.
+    try {
+      const pickerSels = [
+        '[cmdk-input]',
+        'button[aria-haspopup="listbox"]',
+        'button[aria-haspopup="dialog"]',
+        'button[aria-haspopup]',
+        '[role="combobox"]',
+      ];
+      let pickerEl = null;
+      for (const sel of pickerSels) {
+        const el = document.querySelector(sel);
+        if (el) { pickerEl = el; break; }
       }
-      if (strict && !isLikelyChatModelName(cleaned)) {
-        return;
-      }
-      const key = cleaned.toLowerCase();
-      if (!canonicalToOriginal.has(key)) {
-        canonicalToOriginal.set(key, cleaned);
-      }
-      names.add(key);
-    };
+      if (pickerEl) {
+        pickerEl.click();
+        await new Promise(r => setTimeout(r, 1500));
 
+        // Read all items from the open dropdown
+        const names = new Set();
+        const items = document.querySelectorAll('[cmdk-item], [role="option"], [role="menuitem"]');
+        for (const el of items) {
+          const val = el.getAttribute('data-value') || el.getAttribute('value') || '';
+          if (val && val.length >= 3 && val.length <= 120) {
+            names.add(val);
+            continue;
+          }
+          // Fallback: read visible text if it looks like a model name
+          const txt = (el.textContent || '').trim();
+          if (txt && txt.length >= 3 && txt.length <= 80 && txt.includes('-')) {
+            names.add(txt);
+          }
+        }
+
+        // Close dropdown
+        document.dispatchEvent(new KeyboardEvent('keydown',
+          {key: 'Escape', keyCode: 27, bubbles: true, cancelable: true}));
+
+        if (names.size > 3) {
+          return Array.from(names).sort();
+        }
+      }
+    } catch (_) {}
+
+    // Strategy 2: Filter initialModels from HTML
     const initialModels = collectInitialModelsFromHtml();
     if (initialModels.length > 0) {
-      let compatibleCount = 0;
+      const names = new Set();
       for (const model of initialModels) {
-        if (!isLikelyChatModelObject(model)) {
-          continue;
+        if (model.userSelectable !== true) continue;
+        const caps = model.capabilities || {};
+        const inputCaps = caps.inputCapabilities || {};
+        const outputCaps = caps.outputCapabilities || {};
+        if (!inputCaps.text || !outputCaps.text) continue;
+        const rbm = model.rankByModality || {};
+        const rankedModes = Object.keys(rbm);
+        if (rankedModes.length > 0) {
+          const hasTextMode = rankedModes.some(m =>
+            m === "chat" || m === "webdev" || m === "text" || m === "code"
+          );
+          if (!hasTextMode) continue;
         }
-        compatibleCount += 1;
-        addName(modelPrimaryName(model), { strict: true });
+        const name = modelPrimaryName(model);
+        if (name && name.length >= 2) names.add(name);
       }
-      if (compatibleCount > 0 && names.size > 0) {
-        addName(detectEffectiveModel(""), { strict: true });
-        return Array.from(names)
-          .map((v) => canonicalToOriginal.get(v) || String(v || "").trim())
-          .filter(Boolean)
-          .sort((a, b) => a.localeCompare(b));
+      if (names.size > 3) {
+        return Array.from(names).sort();
       }
-      // If we couldn't classify models, keep previous broader behavior as fallback.
-      for (const model of initialModels) {
-        addName(model.publicName, { strict: false });
-        addName(model.slug, { strict: false });
-        addName(model.name, { strict: false });
-      }
-      addName(detectEffectiveModel(""), { strict: false });
-      for (const slug of DEFAULT_MODEL_SLUGS) {
-        addName(slug, { strict: true });
-      }
-      return Array.from(names)
-        .map((v) => canonicalToOriginal.get(v) || String(v || "").trim())
-        .filter(Boolean)
-        .sort((a, b) => a.localeCompare(b));
     }
 
-    const map1 = buildModelLookupFromNextData();
-    const map2 = buildModelLookupFromHtmlRegex();
-    const map3 = buildNameToIdFromInitialModels();
-    for (const key of map1.keys()) {
-      if (key) addName(key, { strict: true });
-    }
-    for (const key of map2.keys()) {
-      if (key) addName(key, { strict: true });
-    }
-    for (const key of map3.keys()) {
-      if (key) addName(key, { strict: true });
-    }
-
-    addName(detectEffectiveModel(""), { strict: true });
-    for (const slug of DEFAULT_MODEL_SLUGS) {
-      addName(slug, { strict: true });
-    }
-
-    return Array.from(names)
-      .map((v) => canonicalToOriginal.get(v) || String(v || "").trim())
-      .filter(Boolean)
-      .sort((a, b) => a.localeCompare(b));
+    // Fallback
+    return [...DEFAULT_MODEL_SLUGS];
   }
 
   function detectSelectedModelIdFromDom() {
@@ -811,47 +823,6 @@
     return null;
   }
 
-  async function mintRecaptchaV3Token(action) {
-    try {
-      const sitekey = detectRecaptchaSiteKey();
-      if (!sitekey) {
-        return "";
-      }
-      const g = await waitForRecaptchaClient(sitekey, 20000, 250);
-      if (!g || typeof g.execute !== "function") {
-        return "";
-      }
-
-      if (typeof g.ready === "function") {
-        await new Promise((resolve) => {
-          let done = false;
-          const finish = () => {
-            if (!done) {
-              done = true;
-              resolve();
-            }
-          };
-          try {
-            g.ready(finish);
-          } catch (_err) {
-            finish();
-          }
-          setTimeout(finish, 3000);
-        });
-      }
-
-      const params = Object.create(null);
-      params.action = detectRecaptchaAction(String(action || DEFAULT_RECAPTCHA_ACTION));
-      const token = await Promise.race([
-        Promise.resolve().then(() => g.execute(sitekey, params)),
-        new Promise((resolve) => setTimeout(() => resolve(""), 8000))
-      ]);
-      return typeof token === "string" ? token : "";
-    } catch (_error) {
-      return "";
-    }
-  }
-
   async function mintRecaptchaV2Token() {
     try {
       const sitekey = detectRecaptchaV2SiteKey();
@@ -1070,7 +1041,123 @@
     const operation = job && job.metadata && typeof job.metadata.operation === "string"
       ? String(job.metadata.operation)
       : "";
-    if (operation === "fetch_models") {
+    if (operation === "debug_models") {
+      const MAX_RANK = 9007199254740991;
+      const raw = collectInitialModelsFromHtml();
+
+      // Categorize all models
+      const selectable = [];
+      const hidden = [];
+      for (const m of raw) {
+        const name = modelPrimaryName(m);
+        const rbm = m.rankByModality || {};
+        const chatRank = rbm.chat;
+        const caps = m.capabilities || {};
+        const inputCaps = caps.inputCapabilities || {};
+        const outputCaps = caps.outputCapabilities || {};
+        const entry = {
+          name,
+          userSelectable: m.userSelectable,
+          organization: m.organization,
+          chatRank: chatRank === MAX_RANK ? "MAX" : chatRank,
+          rankByModality: Object.fromEntries(
+            Object.entries(rbm).map(([k,v]) => [k, v === MAX_RANK ? "MAX" : v])
+          ),
+          inputCaps: Object.keys(inputCaps).filter(k => inputCaps[k]),
+          outputCaps: Object.keys(outputCaps).filter(k => outputCaps[k]),
+        };
+        if (m.userSelectable === true) selectable.push(entry);
+        else hidden.push(entry);
+      }
+
+      emit("JOB_COMPLETE", {
+        request_id: requestId,
+        job_id: job.job_id,
+        result: {
+          text: JSON.stringify({
+            total: raw.length,
+            selectable_count: selectable.length,
+            hidden_count: hidden.length,
+            selectable_count_chat_only: selectable.filter(m => m.rankByModality && m.rankByModality.chat !== undefined && m.rankByModality.chat !== "MAX").length,
+            selectable_count_chat_any: selectable.filter(m => m.rankByModality && m.rankByModality.chat !== undefined).length,
+            selectable_count_webdev: selectable.filter(m => m.rankByModality && m.rankByModality.webdev !== undefined).length,
+            selectable: selectable.slice(0, 50),
+            truncated: selectable.length > 50,
+          }, null, 2),
+          conversation_id: null,
+          effective_model: null,
+          raw_event_count: 0,
+          metadata: {}
+        }
+      });
+      return;
+    }
+    if (operation === "navigate") {
+      const url = job.metadata && job.metadata.url ? String(job.metadata.url) : "";
+      if (url) {
+        window.location.href = url;
+      }
+      emit("JOB_COMPLETE", {
+        request_id: requestId,
+        job_id: job.job_id,
+        result: {
+          text: "",
+          conversation_id: null,
+          effective_model: null,
+          raw_event_count: 0,
+          metadata: { navigated_to: url }
+        }
+      });
+      return;
+    }
+    if (operation === "fetch_all_models") {
+      // Fetch models from BOTH text/direct and code/direct dropdowns
+      const originalUrl = window.location.href;
+
+      // Read text/direct dropdown (current page or navigate to it)
+      if (!window.location.pathname.includes("/text/direct")) {
+        window.location.href = "https://arena.ai/text/direct";
+        await new Promise(r => setTimeout(r, 3000));
+      }
+      const chatModels = await getAvailableModelNames();
+
+      // Navigate to code/direct and read that dropdown
+      window.location.href = "https://arena.ai/code/direct";
+      await new Promise(r => setTimeout(r, 3000));
+      const codeModels = await getAvailableModelNames();
+
+      // Navigate back to text/direct
+      window.location.href = "https://arena.ai/text/direct";
+
+      // Build capability map
+      const capMap = {};
+      const initialModels = collectInitialModelsFromHtml();
+      for (const m of initialModels) {
+        const name = modelPrimaryName(m);
+        if (!name) continue;
+        const caps = m.capabilities || {};
+        const ic = caps.inputCapabilities || {};
+        const oc = caps.outputCapabilities || {};
+        const features = [];
+        if (ic.image) features.push("image-input");
+        if (ic.file) features.push("file-input");
+        if (oc.web) features.push("search");
+        if (oc.code) features.push("code");
+        if (features.length > 0) capMap[name] = features;
+      }
+
+      // Merge: tag which modes each model supports
+      const allNames = new Set([...chatModels, ...codeModels]);
+      const chatSet = new Set(chatModels);
+      const codeSet = new Set(codeModels);
+      const modelModes = {};
+      for (const name of allNames) {
+        const modes = [];
+        if (chatSet.has(name)) modes.push("chat");
+        if (codeSet.has(name)) modes.push("code");
+        modelModes[name] = modes;
+      }
+
       emit("JOB_COMPLETE", {
         request_id: requestId,
         job_id: job.job_id,
@@ -1080,7 +1167,45 @@
           effective_model: null,
           raw_event_count: 0,
           metadata: {
-            models: getAvailableModelNames()
+            models: Array.from(allNames).sort(),
+            chat_models: chatModels,
+            code_models: codeModels,
+            capabilities: capMap,
+            model_modes: modelModes,
+          }
+        }
+      });
+      return;
+    }
+    if (operation === "fetch_models") {
+      const modelNames = await getAvailableModelNames();
+      // Also build capability map from initialModels
+      const capMap = {};
+      const initialModels = collectInitialModelsFromHtml();
+      for (const m of initialModels) {
+        const name = modelPrimaryName(m);
+        if (!name) continue;
+        const caps = m.capabilities || {};
+        const ic = caps.inputCapabilities || {};
+        const oc = caps.outputCapabilities || {};
+        const features = [];
+        if (ic.image) features.push("image-input");
+        if (ic.file) features.push("file-input");
+        if (oc.web) features.push("search");
+        if (oc.code) features.push("code");
+        if (features.length > 0) capMap[name] = features;
+      }
+      emit("JOB_COMPLETE", {
+        request_id: requestId,
+        job_id: job.job_id,
+        result: {
+          text: "",
+          conversation_id: null,
+          effective_model: null,
+          raw_event_count: 0,
+          metadata: {
+            models: modelNames,
+            capabilities: capMap
           }
         }
       });
@@ -1088,7 +1213,31 @@
     }
 
     const endpoint = buildEndpoint(job.conversation_id || null);
-    let recaptchaToken = await mintRecaptchaV3Token("chat_submit");
+
+    // Wait for initial warm-up if still loading (up to 10s)
+    if (!_warmupDone) {
+      const wStart = Date.now();
+      while (!_warmupDone && Date.now() - wStart < 10000) {
+        await new Promise(r => setTimeout(r, 300));
+      }
+    }
+
+    // Grab cached token if fresh, or mint new one.
+    // Atomic consume: read + clear in same tick prevents a second
+    // concurrent job from reusing the same single-use token.
+    let recaptchaToken = "";
+    if (isTokenFresh()) {
+      recaptchaToken = _cachedToken;
+      _cachedToken = "";
+      _cachedTokenAt = 0;
+    } else {
+      _cachedToken = "";
+      _cachedTokenAt = 0;
+      recaptchaToken = await refreshToken();
+      // refreshToken() writes to cache — consume immediately
+      _cachedToken = "";
+      _cachedTokenAt = 0;
+    }
     const payload = buildPayload(job, recaptchaToken);
 
     const postOnce = async (token) => {
@@ -1123,16 +1272,23 @@
       };
       if (isRecaptchaValidationFailure(response.status, firstPreview)) {
         recaptchaRetryAttempted = true;
-        const refreshedToken = await mintRecaptchaV3Token("chat_submit");
+        // Wait 2s for enterprise reCAPTCHA to fully initialize, then retry
+        await new Promise(r => setTimeout(r, 2000));
+        const refreshedToken = await refreshToken();
         if (refreshedToken) {
           recaptchaToken = refreshedToken;
           payload.recaptchaV3Token = refreshedToken;
           response = await postOnce(refreshedToken);
+        } else {
+          // No v3 token — try without token (arena may accept logged-in users)
+          payload.recaptchaV3Token = "";
+          response = await postOnce("");
         }
         if (!response.ok) {
           const secondPreview = await readBodyPreview(response);
           if (isRecaptchaValidationFailure(response.status, secondPreview)) {
             recaptchaV2Attempted = true;
+            // Last resort: try v2 invisible
             const v2Token = await mintRecaptchaV2Token();
             if (v2Token) {
               payload.recaptchaV2Token = v2Token;
@@ -1154,25 +1310,45 @@
       } else if (isPromptFailedFailure(response.status, firstPreview)) {
         promptRetryAttempted = true;
         await new Promise((resolve) => setTimeout(resolve, 900 + Math.floor(Math.random() * 500)));
-        if (!recaptchaToken) {
-          const refreshedToken = await mintRecaptchaV3Token("chat_submit");
-          if (refreshedToken) {
-            recaptchaToken = refreshedToken;
-            payload.recaptchaV3Token = refreshedToken;
-          }
+        // Always mint fresh — the original token was already consumed by the first attempt
+        const refreshedToken = await refreshToken();
+        if (refreshedToken) {
+          recaptchaToken = refreshedToken;
+          payload.recaptchaV3Token = refreshedToken;
         }
         response = await postOnce(recaptchaToken || "");
+        // Handle 429→403 cascade: prompt retry got reCAPTCHA failure back
+        if (!response.ok) {
+          const retryPreview = await readBodyPreview(response);
+          if (isRecaptchaValidationFailure(response.status, retryPreview)) {
+            recaptchaRetryAttempted = true;
+            await new Promise(r => setTimeout(r, 2000));
+            const recapToken = await refreshToken();
+            if (recapToken) {
+              recaptchaToken = recapToken;
+              payload.recaptchaV3Token = recapToken;
+              response = await postOnce(recapToken);
+            }
+          }
+        }
       } else if (isTooManyRequestsFailure(response.status, firstPreview)) {
         tooManyRequestsRetryAttempted = true;
         const retryAfterHeader = response.headers && typeof response.headers.get === "function"
           ? response.headers.get("retry-after")
           : "";
         const retryAfterSeconds = parseRetryAfterSeconds(retryAfterHeader);
-        const waitMs = retryAfterSeconds != null
-          ? Math.min(Math.max(retryAfterSeconds * 1000, 1200), 12000)
-          : 2200 + Math.floor(Math.random() * 1200);
-        await new Promise((resolve) => setTimeout(resolve, waitMs));
-        response = await postOnce(recaptchaToken || "");
+        // If arena.ai wants us to wait >30s, don't bother retrying — fail fast
+        // so the backend can report the cooldown to the user
+        if (retryAfterSeconds != null && retryAfterSeconds > 30) {
+          // Don't retry — let it fall through to the error handler below
+          // which will include retry_after_header in diagnostics
+        } else {
+          const waitMs = retryAfterSeconds != null
+            ? Math.min(Math.max(retryAfterSeconds * 1000, 1200), 30000)
+            : 2200 + Math.floor(Math.random() * 1200);
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          response = await postOnce(recaptchaToken || "");
+        }
       }
     }
 
@@ -1182,14 +1358,22 @@
         : await readBodyPreview(response);
 
       const cookies = document.cookie || "";
-      const hasAuthCookie = /(?:^|;\s*)arena-auth-prod-v1=/.test(cookies);
+      // Arena.ai uses provisional_user_id + httpOnly session cookies.
+      // Check for any arena-related auth indicator we can see from JS.
+      const hasProvUserId = /(?:^|;\s*)provisional_user_id=/.test(cookies);
       const hasCfClearance = /(?:^|;\s*)cf_clearance=/.test(cookies);
-      const authUserNode = document.querySelector("[data-user-id], [data-authenticated='true']");
-      const loginNode = document.querySelector("a[href*='sign-in'],button[aria-label*='sign in' i]");
+      const hasAnyCookie = cookies.length > 10; // At minimum some cookies should exist
+      const authUserNode = document.querySelector(
+        "[data-user-id], [data-authenticated='true'], [data-testid='user-menu'], [data-testid='avatar'], img[alt*='avatar' i]"
+      );
+      const loginNode = document.querySelector(
+        "a[href*='sign-in'], a[href*='login'], button[aria-label*='sign in' i], button[aria-label*='log in' i]"
+      );
       const diagnostics = {
         bridge_version: BRIDGE_VERSION,
-        has_auth_cookie: hasAuthCookie,
+        has_provisional_user_id: hasProvUserId,
         has_cf_clearance: hasCfClearance,
+        has_any_cookies: hasAnyCookie,
         likely_logged_in_ui: Boolean(authUserNode) && !loginNode,
         endpoint,
         modelAId: payload.modelAId,
@@ -1205,6 +1389,7 @@
           ? (response.headers.get("retry-after") || "")
           : "",
         recaptcha_env: getRecaptchaEnvironmentSnapshot(),
+        recaptcha_token_status: getTokenStatus(),
         payload_keys: Object.keys(payload || {})
       };
 
@@ -1231,6 +1416,7 @@
     let conversationId = job.conversation_id || null;
     let eventCount = 0;
     let fatalError = null;
+    const toolCallMap = {};
 
     while (true) {
       const { done, value } = await reader.read();
@@ -1276,6 +1462,24 @@
           conversationId = maybeConversationId;
         }
 
+        const tcs = extractToolCalls(frame);
+        if (tcs) {
+          for (const tc of tcs) {
+            const idx = tc.index ?? 0;
+            if (!toolCallMap[idx]) {
+              toolCallMap[idx] = {
+                id: tc.id || uuidV7(),
+                type: "function",
+                function: { name: "", arguments: "" }
+              };
+            }
+            if (tc.function) {
+              if (tc.function.name) toolCallMap[idx].function.name += tc.function.name;
+              if (tc.function.arguments) toolCallMap[idx].function.arguments += tc.function.arguments;
+            }
+          }
+        }
+
         finalText += chunk;
       }
     }
@@ -1294,6 +1498,10 @@
       }
     }
 
+    const collectedToolCalls = Object.keys(toolCallMap).length > 0
+      ? Object.values(toolCallMap)
+      : null;
+
     emit("JOB_COMPLETE", {
       request_id: requestId,
       job_id: job.job_id,
@@ -1301,17 +1509,153 @@
         text: stripReasoningArtifacts(finalText.trim()),
         conversation_id: conversationId,
         effective_model: detectEffectiveModel(job.model),
-        raw_event_count: eventCount
+        raw_event_count: eventCount,
+        tool_calls: collectedToolCalls
+      }
+    });
+
+    // Pre-mint next token immediately after job completes
+    // so the next request has a fresh one ready
+    refreshToken();
+  }
+
+  // ── reCAPTCHA token manager ──
+  // Keeps a fresh token always ready. Tokens expire ~2min, so we re-mint
+  // every 90s. Uses setTimeout chain (not setInterval) because Chrome
+  // throttles setInterval in background tabs to ≥1min. Also refreshes
+  // immediately when tab regains visibility.
+  const TOKEN_REFRESH_MS = 90000; // 90s — well under 2min expiry
+  let _cachedToken = "";
+  let _cachedTokenAt = 0;
+  let _warmupDone = false;
+  let _refreshLoopRunning = false;
+  let _refreshCount = 0;
+  let _lastRefreshError = "";
+  let _refreshInFlight = false; // Prevents concurrent grecaptcha.execute()
+
+  function isTokenFresh() {
+    return Boolean(_cachedToken) && (Date.now() - _cachedTokenAt) < TOKEN_REFRESH_MS;
+  }
+
+  async function refreshToken() {
+    // Prevent concurrent refreshes — grecaptcha.execute() shouldn't overlap
+    if (_refreshInFlight) {
+      // Wait for in-flight refresh to finish, return whatever it got
+      const waitStart = Date.now();
+      while (_refreshInFlight && Date.now() - waitStart < 10000) {
+        await new Promise(r => setTimeout(r, 200));
+      }
+      return _cachedToken || "";
+    }
+
+    _refreshInFlight = true;
+    try {
+      const sitekey = detectRecaptchaSiteKey();
+      if (!sitekey) return "";
+
+      const g = await waitForRecaptchaClient(sitekey, _warmupDone ? 5000 : 30000, 300);
+      if (!g || typeof g.execute !== "function") return "";
+
+      if (!_warmupDone && typeof g.ready === "function") {
+        await new Promise((resolve) => {
+          let done = false;
+          const finish = () => { if (!done) { done = true; resolve(); } };
+          try { g.ready(finish); } catch (_) { finish(); }
+          setTimeout(finish, 5000);
+        });
+      }
+
+      const params = Object.create(null);
+      params.action = detectRecaptchaAction(DEFAULT_RECAPTCHA_ACTION);
+      const token = await Promise.race([
+        Promise.resolve().then(() => g.execute(sitekey, params)),
+        new Promise((r) => setTimeout(() => r(""), 8000))
+      ]);
+
+      if (typeof token === "string" && token) {
+        _cachedToken = token;
+        _cachedTokenAt = Date.now();
+        _refreshCount++;
+        _lastRefreshError = "";
+        return token;
+      }
+      return "";
+    } catch (err) {
+      _lastRefreshError = String(err && err.message || err || "unknown");
+      return "";
+    } finally {
+      _refreshInFlight = false;
+    }
+  }
+
+  async function warmUpRecaptcha() {
+    const sitekey = detectRecaptchaSiteKey();
+    if (sitekey) injectRecaptchaScripts(sitekey);
+    await refreshToken();
+    _warmupDone = true;
+    scheduleNextRefresh();
+    listenForVisibilityChange();
+  }
+
+  // Use setTimeout chain instead of setInterval.
+  // Chrome throttles setInterval in background tabs to ≥60s.
+  // setTimeout chain fires once after the delay, then re-schedules.
+  // If tab is throttled, we catch up via visibilitychange listener.
+  function scheduleNextRefresh() {
+    if (_refreshLoopRunning) return;
+    _refreshLoopRunning = true;
+    function loop() {
+      setTimeout(() => {
+        refreshToken().catch(() => {});
+        loop();
+      }, TOKEN_REFRESH_MS);
+    }
+    loop();
+  }
+
+  // When tab comes back from background, token may be stale because
+  // Chrome throttled our refresh loop. Immediately re-mint.
+  function listenForVisibilityChange() {
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && !isTokenFresh()) {
+        refreshToken().catch(() => {});
       }
     });
   }
+
+  function getTokenStatus() {
+    return {
+      has_token: Boolean(_cachedToken),
+      token_age_ms: _cachedToken ? Date.now() - _cachedTokenAt : null,
+      is_fresh: isTokenFresh(),
+      refresh_count: _refreshCount,
+      last_error: _lastRefreshError,
+      refresh_in_flight: _refreshInFlight
+    };
+  }
+
+  // Start warm-up after short delay, then auto-refresh loop kicks in
+  setTimeout(() => warmUpRecaptcha(), 1500);
 
   window.addEventListener("message", (event) => {
     if (event.source !== window) {
       return;
     }
     const data = event.data;
-    if (!data || data.source !== EXTENSION_SOURCE || data.type !== "RUN_JOB") {
+    if (!data || data.source !== EXTENSION_SOURCE) {
+      return;
+    }
+
+    // Token health check — backend can query without running a job
+    if (data.type === "TOKEN_STATUS") {
+      emit("TOKEN_STATUS", {
+        request_id: data.request_id || "",
+        status: getTokenStatus()
+      });
+      return;
+    }
+
+    if (data.type !== "RUN_JOB") {
       return;
     }
 

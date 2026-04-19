@@ -250,12 +250,14 @@ class ChatGPTDirectAdapter:
         *,
         tools: list[dict] | None = None,
         tool_choice=None,
+        thinking_effort: str = "off",
     ) -> dict:
         """
         Pass-through for the compat layer.
         Takes Chat Completions format messages/tools, returns a Chat Completions response dict.
         Does not touch self.conversation_history (the client owns state).
         """
+        from backend.thinking import chatgpt_reasoning_param
         instructions, input_items = _convert_messages_to_input(messages)
         ws_tools = _convert_tools_to_ws(tools) if tools else []
         ws_tool_choice = _convert_tool_choice(tool_choice, has_tools=bool(ws_tools))
@@ -268,6 +270,7 @@ class ChatGPTDirectAdapter:
                 instructions=instructions,
                 tools=ws_tools,
                 tool_choice=ws_tool_choice,
+                reasoning=chatgpt_reasoning_param(thinking_effort),
             )
             return _result_to_chat_completions(result, self._model)
         except Exception as exc:
@@ -384,6 +387,7 @@ class ChatGPTDirectAdapter:
         instructions: str = "You are a helpful assistant.",
         tools: list | None = None,
         tool_choice=None,
+        reasoning: dict | None = None,
     ) -> dict:
         """
         Try up to twice (existing connection, then reconnect).
@@ -399,7 +403,7 @@ class ChatGPTDirectAdapter:
         for attempt in range(2):
             try:
                 await self._ensure_ws(token, account_id)
-                return await self._do_request(input_items, instructions, tools, tool_choice)
+                return await self._do_request(input_items, instructions, tools, tool_choice, reasoning=reasoning)
             except websockets.exceptions.ConnectionClosed as exc:
                 logger.warning("[ChatGPTDirect] Connection closed mid-flight: %s", exc)
                 await self._close_ws()
@@ -412,6 +416,8 @@ class ChatGPTDirectAdapter:
         instructions: str,
         tools: list,
         tool_choice,
+        *,
+        reasoning: dict | None = None,
     ) -> dict:
         """
         Send one response.create and collect the full response.
@@ -429,6 +435,8 @@ class ChatGPTDirectAdapter:
             "stream": True,
             "include": [],
         }
+        if reasoning:
+            payload["reasoning"] = reasoning
 
         await self._ws.send(json.dumps(payload))
 
