@@ -376,36 +376,9 @@ curl -X POST http://localhost:7200/v1/chat/completions \
 
 ## Architecture
 
-```
-                          +-----------------------+
-                          |    FreeHive Chat UI    |
-                          |   (SvelteKit + Vite)   |
-                          |   localhost:5173        |
-                          +-----------+-----------+
-                                      |
-                                      v
-                    +----------------------------------+
-                    |        FastAPI Backend            |
-                    |        localhost:7200             |
-                    |                                  |
-                    |  /v1/messages    (Anthropic API)  |
-                    |  /v1/chat/completions (OpenAI API)|
-                    |  /api/*          (FreeHive API)   |
-                    +-----+--------+--------+----+-----+
-                          |        |        |    |
-                    +-----+  +-----+  +-----+  ++-------+
-                    |        |        |         |        |
-               +----v---+ +-v------+ +-v-----+ +v-------+--+
-               | Claude | |ChatGPT | |Gemini | |   Arena   |
-               | Direct | | Direct | |Direct | |  Bridge   |
-               |Adapter | |Adapter | |Adapter| |  Adapter  |
-               +----+---+ +---+----+ +---+---+ +-----+-----+
-                    |          |          |            |
-                    v          v          v            v
-              Anthropic    ChatGPT    Cloud Code   Chrome Ext
-              REST API    WebSocket   Assist API   → arena.ai
-              (OAuth)     (OAuth)     (OAuth)      (150+ models)
-```
+<p align="center">
+  <img src="docs/images/freehive_architecture.svg" alt="FreeHive Architecture" width="100%"/>
+</p>
 
 ### Tech Stack
 
