@@ -170,13 +170,16 @@ def _get_codex_client_version() -> str:
     """Read the installed Codex CLI version from its package.json."""
     try:
         import subprocess
-        result = subprocess.run(
-            ["bash", "-l", "-c", "cat $(npm root -g)/@openai/codex/package.json"],
-            capture_output=True, text=True, timeout=5,
-        )
+        import os
+        from pathlib import Path
+        cmd = ["cmd", "/c", "npm root -g"] if os.name == "nt" else ["bash", "-l", "-c", "npm root -g"]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
         if result.returncode == 0:
-            data = json.loads(result.stdout)
-            return data.get("version", "0.118.0")
+            npm_root = result.stdout.strip()
+            pkg_path = Path(npm_root) / "@openai" / "codex" / "package.json"
+            if pkg_path.exists():
+                data = json.loads(pkg_path.read_text(encoding="utf-8"))
+                return data.get("version", "0.118.0")
     except Exception:
         pass
     return "0.118.0"
@@ -240,12 +243,21 @@ async def discover_chatgpt_models() -> dict:
                 # Only show models the CLI shows (visibility=list); hide deprecated/hidden ones
                 if visibility == "hide":
                     continue
+                reasoning = [
+                    lv["effort"]
+                    for lv in m.get("supported_reasoning_levels", [])
+                    if isinstance(lv, dict) and "effort" in lv
+                ]
                 models.append({
                     "id": slug,
                     "display_name": m.get("display_name") or slug,
-                    "note": _chatgpt_model_note(m),
+                    "note": _chatgpt_model_note(m, tier),
                     "description": m.get("description", ""),
                     "context_window": m.get("context_window"),
+                    "supported_in_api": m.get("supported_in_api"),
+                    "priority": m.get("priority"),
+                    "reasoning_levels": reasoning,
+                    "default_reasoning_level": m.get("default_reasoning_level"),
                 })
             result["models"] = models
             logger.info("[ModelDiscovery] ChatGPT: found %d visible models (client_version=%s)", len(models), client_version)
@@ -258,7 +270,7 @@ async def discover_chatgpt_models() -> dict:
         logger.warning("[ModelDiscovery] ChatGPT model fetch failed: %s", exc)
 
     # Fallback: known working models
-    result["models"] = _chatgpt_fallback_models()
+    result["models"] = _chatgpt_fallback_models(tier)
     return result
 
 
@@ -267,33 +279,39 @@ def _decode_chatgpt_tier(token: str) -> str:
         payload_b64 = token.split(".")[1]
         payload_b64 += "=" * (4 - len(payload_b64) % 4)
         payload = json.loads(base64.b64decode(payload_b64))
-        return payload.get("chatgpt_plan_type", "unknown")
+        tier = payload.get("chatgpt_plan_type")
+        if not tier:
+            auth_claim = payload.get("https://api.openai.com/auth", {})
+            tier = auth_claim.get("chatgpt_plan_type")
+        return tier or "unknown"
     except Exception:
         return "unknown"
 
 
-def _chatgpt_model_note(m: dict) -> str:
+def _chatgpt_model_note(m: dict, tier: str = "unknown") -> str:
     slug = m.get("slug", "").lower()
     desc = m.get("description", "").lower()
+
     if "mini" in slug:
-        return "smaller, faster"
-    if "5.4" in slug and "mini" not in slug:
-        return "latest, most capable"
-    if "5.3" in slug:
-        return "frontier"
-    if "5.2" in slug:
-        return "previous gen"
-    if "reasoning" in desc or m.get("default_reasoning_level"):
-        return "reasoning"
-    return ""
+        return "fast"
+    elif "5.4" in slug:
+        return "most capable"
+    elif "5.3" in slug:
+        return "best quality"
+    elif "5.2" in slug:
+        return "balanced"
+    elif "reasoning" in desc or m.get("default_reasoning_level"):
+        return "most capable"
+    else:
+        return ""
 
 
-def _chatgpt_fallback_models() -> list[dict]:
+def _chatgpt_fallback_models(tier: str = "unknown") -> list[dict]:
     return [
-        {"id": "gpt-5.4",      "display_name": "gpt-5.4",      "note": "latest, most capable"},
-        {"id": "gpt-5.4-mini", "display_name": "GPT-5.4-Mini", "note": "smaller, faster"},
-        {"id": "gpt-5.3-codex","display_name": "gpt-5.3-codex","note": "frontier"},
-        {"id": "gpt-5.2",      "display_name": "gpt-5.2",      "note": "previous gen"},
+        {"id": "gpt-5.4",      "display_name": "gpt-5.4",      "note": "most capable"},
+        {"id": "gpt-5.4-mini", "display_name": "GPT-5.4-Mini", "note": "fast"},
+        {"id": "gpt-5.3-codex","display_name": "gpt-5.3-codex","note": "best quality"},
+        {"id": "gpt-5.2",      "display_name": "gpt-5.2",      "note": "balanced"},
     ]
 
 
@@ -352,9 +370,21 @@ async def discover_gemini_models() -> dict:
         if resp.status_code == 200:
             data = resp.json()
             project_id = data.get("cloudaicompanionProject")
-            # Check if user has a paid tier (enterprise/workspace accounts have different fields)
-            if data.get("enterpriseDataAccessEnabled") or data.get("workspaceEnabled"):
+
+            # Detect subscription tier from API response
+            paid_tier = data.get("paidTier", {})
+            current_tier = data.get("currentTier", {})
+            paid_id = paid_tier.get("id", "")
+
+            if "pro" in paid_id.lower():
+                tier = "pro"
+            elif paid_id:
+                tier = paid_tier.get("name", paid_id)
+            elif data.get("enterpriseDataAccessEnabled") or data.get("workspaceEnabled"):
                 tier = "workspace"
+            elif current_tier.get("id") == "standard-tier":
+                tier = "standard"
+
             result["tier"] = tier
     except Exception as exc:
         logger.warning("[ModelDiscovery] Gemini loadCodeAssist failed: %s", exc)
@@ -391,30 +421,44 @@ async def discover_gemini_models() -> dict:
 
 
 def _parse_gemini_quota(quota_data: dict) -> list[dict]:
-    """Parse the retrieveUserQuota response to extract available models."""
-    models = []
-    seen = set()
+    """Parse the retrieveUserQuota response and merge with known model list."""
+    quota_by_id: dict = {}
 
-    # The quota response has a structure like:
-    # { "quotas": [{ "model": "gemini-...", "limit": ..., "remaining": ... }] }
     for quota in quota_data.get("quotas", []):
         model_id = quota.get("model") or quota.get("modelId") or ""
-        if not model_id or model_id in seen:
+        if not model_id or model_id in quota_by_id:
             continue
-        seen.add(model_id)
         remaining = quota.get("remaining", quota.get("remainingCount", 1))
         limit = quota.get("limit", quota.get("dailyLimit", 1))
-        exhausted = (remaining == 0)
+        quota_by_id[model_id] = {"remaining": remaining, "limit": limit}
+
+    # Start from the full known model list, enrich with quota data where available
+    models = []
+    seen = set()
+    for base in _gemini_fallback_models("free"):
+        mid = base["id"]
+        seen.add(mid)
+        q = quota_by_id.get(mid)
+        exhausted = q is not None and q["remaining"] == 0
+        models.append({
+            **base,
+            "note": "exhausted today" if exhausted else base["note"],
+            **({"quota_remaining": q["remaining"], "quota_limit": q["limit"]} if q else {}),
+        })
+
+    # Also include any quota models not already in the known list
+    for model_id, q in quota_by_id.items():
+        if model_id in seen:
+            continue
+        exhausted = q["remaining"] == 0
         models.append({
             "id": model_id,
             "display_name": _gemini_display_name(model_id),
             "note": "exhausted today" if exhausted else _gemini_note(model_id),
-            "quota_remaining": remaining,
-            "quota_limit": limit,
+            "quota_remaining": q["remaining"],
+            "quota_limit": q["limit"],
         })
 
-    # Sort: flash first, then pro
-    models.sort(key=lambda m: (0 if "flash" in m["id"] else 1, m["id"]))
     return models
 
 
@@ -436,16 +480,53 @@ def _gemini_note(model_id: str) -> str:
 
 def _gemini_fallback_models(tier: str) -> list[dict]:
     return [
-        {"id": "gemini-3-flash-preview",  "display_name": "Gemini 3 Flash Preview",    "note": "fast"},
-        {"id": "gemini-2.5-flash",        "display_name": "Gemini 2.5 Flash",          "note": "balanced"},
-        {"id": "gemini-2.5-flash-lite",   "display_name": "Gemini 2.5 Flash Lite",     "note": "most quota"},
-        {"id": "gemini-2.5-pro",          "display_name": "Gemini 2.5 Pro",            "note": "best quality"},
+        {"id": "gemini-3.1-pro-preview",           "display_name": "Gemini 3.1 Pro Preview",           "note": "best quality"},
+        {"id": "gemini-3-pro-preview",             "display_name": "Gemini 3 Pro Preview",             "note": "best quality"},
+        {"id": "gemini-3.1-flash-lite-preview",    "display_name": "Gemini 3.1 Flash Lite Preview",    "note": "fast"},
+        {"id": "gemini-3-flash-preview",           "display_name": "Gemini 3 Flash Preview",           "note": "fast"},
+        {"id": "gemini-2.5-pro",                   "display_name": "Gemini 2.5 Pro",                   "note": "balanced"},
+        {"id": "gemini-2.5-flash",                 "display_name": "Gemini 2.5 Flash",                 "note": "balanced"},
+        {"id": "gemini-2.5-flash-lite",            "display_name": "Gemini 2.5 Flash Lite",            "note": "most quota"},
     ]
 
 
 # ---------------------------------------------------------------------------
 # Discover all and cache
 # ---------------------------------------------------------------------------
+
+async def _discover_arena_models() -> dict:
+    """
+    Discover arena.ai models via extension bridge or CloakBrowser fallback.
+    """
+    result = {"provider": "arena", "tier": "free", "models": [], "error": None}
+    try:
+        # Try extension bridge first
+        from backend.services.arena_bridge_transport import is_bridge_available
+        if is_bridge_available():
+            from backend.adapters.arena_bridge_adapter import ArenaBridgeAdapter
+            adapter = ArenaBridgeAdapter()
+            raw_models = await adapter.fetch_models()
+            result["models"] = [
+                {"id": m, "display_name": m.removeprefix("arena/"), "note": ""}
+                for m in raw_models
+            ]
+            return result
+
+        # CloakBrowser fallback
+        from backend.adapters.arena_steel_adapter import ArenaSteelAdapter
+        adapter = ArenaSteelAdapter()
+        if not await adapter.is_available():
+            result["error"] = "No arena transport available (extension or CloakBrowser)"
+            return result
+        raw_models = await adapter.fetch_models()
+        result["models"] = [
+            {"id": m, "display_name": m.removeprefix("arena/"), "note": ""}
+            for m in raw_models
+        ]
+    except Exception as exc:
+        result["error"] = str(exc)
+    return result
+
 
 async def discover_all_models() -> dict:
     """
@@ -459,6 +540,7 @@ async def discover_all_models() -> dict:
         discover_claude_models(),
         discover_chatgpt_models(),
         discover_gemini_models(),
+        _discover_arena_models(),
         return_exceptions=True,
     )
 

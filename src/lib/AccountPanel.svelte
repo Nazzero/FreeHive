@@ -12,6 +12,9 @@
     let busyLogoutTool = '';
     let busyLoginTool = '';
     let loginProgress = '';
+    let loginElapsed = 0;
+    /** @type {ReturnType<typeof setInterval> | null} */
+    let loginTimerInterval = null;
     /** @type {number | null} */
     let lastUpdatedAt = null;
 
@@ -119,7 +122,7 @@
                 name: 'Gemini',
                 authenticated: Boolean(gemini.authenticated),
                 installed: Boolean(gemini.installed),
-                tier: null,
+                tier: gemini.tier || null,
                 detail: gemini.authenticated
                     ? (geminiAccount
                         ? `Connected as ${geminiAccount} via Gemini CLI auth`
@@ -242,6 +245,7 @@
             }
             success = `${provider.name} logged out.`;
             await fetchStatus({ silent: true });
+            dispatch('modelsChanged');
         } catch (e) {
             if (previousStatus) {
                 status = previousStatus;
@@ -261,16 +265,18 @@
                 ? provider.loginOptions.find((/** @type {any} */ o) => o.tool === tool)
                 : null;
             if (!option?.installed) {
-                dispatch('openSettings', { provider: provider.id });
+                dispatch('openSetup', { provider: provider.id });
                 return;
             }
         } else if (!provider.installed) {
-            dispatch('openSettings', { provider: provider.id });
+            dispatch('openSetup', { provider: provider.id });
             return;
         }
 
         busyLoginTool = tool;
         loginProgress = 'Launching authentication flow...';
+        loginElapsed = 0;
+        loginTimerInterval = setInterval(() => { loginElapsed += 1; }, 1000);
         error = '';
         success = '';
 
@@ -289,11 +295,14 @@
 
             await fetchStatus({ silent: true });
             success = `${provider.name} login complete.`;
+            dispatch('modelsChanged');
         } catch (e) {
             error = /** @type {any} */ (e)?.message || `Failed to log in to ${provider.name}.`;
         } finally {
             busyLoginTool = '';
             loginProgress = '';
+            if (loginTimerInterval) { clearInterval(loginTimerInterval); loginTimerInterval = null; }
+            loginElapsed = 0;
         }
     }
 
@@ -303,6 +312,7 @@
 
 <div class="panel">
     <div class="panel-header">
+        <button class="back-btn" on:click={() => dispatch('close')}>← Back</button>
         <h2>Accounts</h2>
         <button class="refresh-btn" on:click={() => fetchStatus()} disabled={loading}>
             {loading ? 'Refreshing...' : 'Refresh'}
@@ -321,7 +331,10 @@
     {/if}
 
     {#if busyLoginTool}
-        <div class="alert info">{loginProgress || 'Authenticating...'}</div>
+        <div class="alert info">
+            {loginProgress || 'Authenticating...'}
+            {#if loginElapsed > 5}<span class="elapsed"> ({loginElapsed}s)</span>{/if}
+        </div>
     {/if}
 
     {#if loading}
@@ -413,6 +426,17 @@
         font-weight: 600;
         color: var(--text-primary);
     }
+
+    .back-btn {
+        background: transparent;
+        border: none;
+        color: var(--text-secondary);
+        font-size: 13px;
+        cursor: pointer;
+        padding: 4px 8px;
+        border-radius: 4px;
+    }
+    .back-btn:hover { color: var(--text-primary); background: var(--bg-secondary); }
 
     .refresh-btn {
         background: var(--bg-secondary);
@@ -548,6 +572,11 @@
 
     .alert.info {
         color: var(--text-secondary);
+    }
+
+    .elapsed {
+        color: var(--text-muted);
+        font-size: 12px;
     }
 
     .empty {

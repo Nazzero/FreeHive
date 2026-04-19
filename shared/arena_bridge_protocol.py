@@ -157,6 +157,7 @@ class ArenaBridgeResult:
     conversation_id: str | None = None
     effective_model: str | None = None
     raw_event_count: int = 0
+    tool_calls: list[dict[str, Any]] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -175,12 +176,19 @@ class ArenaBridgeResult:
             event_count = max(0, int(raw_event_count))
         except (TypeError, ValueError) as exc:
             raise ValueError("'raw_event_count' must be an integer") from exc
+        tool_calls_raw = payload.get("tool_calls")
+        tool_calls = None
+        if isinstance(tool_calls_raw, list) and tool_calls_raw:
+            tool_calls = [tc for tc in tool_calls_raw if isinstance(tc, dict)]
+            if not tool_calls:
+                tool_calls = None
         metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
         return cls(
             text=text,
             conversation_id=conversation_id,
             effective_model=effective_model,
             raw_event_count=event_count,
+            tool_calls=tool_calls,
             metadata=dict(metadata),
         )
 
@@ -194,6 +202,8 @@ class ArenaBridgeResult:
             payload["conversation_id"] = self.conversation_id
         if self.effective_model:
             payload["effective_model"] = self.effective_model
+        if self.tool_calls:
+            payload["tool_calls"] = self.tool_calls
         return payload
 
 

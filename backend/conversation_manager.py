@@ -186,6 +186,34 @@ def delete_session(session_id: str):
         conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
 
 
+def get_session_char_count(session_id: str) -> tuple[int, int]:
+    """Return (total_chars, message_count) for a session via SQL aggregate."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(LENGTH(content)), 0) AS total_chars, COUNT(*) AS msg_count "
+            "FROM messages WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+    return (row["total_chars"], row["msg_count"]) if row else (0, 0)
+
+
+def list_arena_sessions(limit: int = 20) -> list[dict]:
+    """Return recent arena sessions (model starts with 'arena/')."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM sessions WHERE model LIKE 'arena/%' ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def reset_database():
+    """Delete the DB file entirely and recreate with fresh schema."""
+    if DB_PATH.exists():
+        DB_PATH.unlink()
+    init_db()
+
+
 def add_message(
     session_id: str,
     role: str,

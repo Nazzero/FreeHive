@@ -52,7 +52,7 @@ def main() -> int:
         "PyInstaller",
         "--noconfirm",
         "--clean",
-        "--onefile",
+        "--onedir",
         "--name",
         APP_NAME,
         "--distpath",
@@ -61,45 +61,77 @@ def main() -> int:
         str(BUILD_DIR),
         "--specpath",
         str(SPEC_DIR),
-        "--hidden-import",
-        "backend.router",
-        "--hidden-import",
-        "backend.setup_router",
-        "--hidden-import",
-        "backend.compat_router",
-        "--hidden-import",
-        "backend.session_manager",
-        "--hidden-import",
-        "backend.arena_manager",
-        "--hidden-import",
-        "backend.model_discovery",
-        "--hidden-import",
-        "backend.services.arena_bridge_client",
-        "--hidden-import",
-        "backend.services.arena_model_health",
-        "--hidden-import",
-        "backend.services.arena_bridge_transport",
-        "--hidden-import",
-        "backend.adapters.claude_direct_adapter",
-        "--hidden-import",
-        "backend.adapters.chatgpt_direct_adapter",
-        "--hidden-import",
-        "backend.adapters.gemini_direct_adapter",
-        "--hidden-import",
-        "backend.adapters.arena_bridge_adapter",
+        # -- backend core modules --
+        "--hidden-import", "backend.router",
+        "--hidden-import", "backend.setup_router",
+        "--hidden-import", "backend.compat_router",
+        "--hidden-import", "backend.session_manager",
+        "--hidden-import", "backend.arena_manager",
+        "--hidden-import", "backend.model_discovery",
+        "--hidden-import", "backend.conversation_manager",
+        "--hidden-import", "backend.account_store",
+        "--hidden-import", "backend.feature_flags",
+        "--hidden-import", "backend.thinking",
+        "--hidden-import", "backend.usage_fetcher",
+        # -- adapters --
+        "--hidden-import", "backend.adapters.claude_direct_adapter",
+        "--hidden-import", "backend.adapters.claude_adapter",
+        "--hidden-import", "backend.adapters.chatgpt_direct_adapter",
+        "--hidden-import", "backend.adapters.chatgpt_adapter",
+        "--hidden-import", "backend.adapters.gemini_direct_adapter",
+        "--hidden-import", "backend.adapters.arena_bridge_adapter",
+        "--hidden-import", "backend.adapters.arena_steel_adapter",
+        "--hidden-import", "backend.adapters.arena_playwright_adapter",
+        # -- services --
+        "--hidden-import", "backend.services.arena_bridge_client",
+        "--hidden-import", "backend.services.arena_model_health",
+        "--hidden-import", "backend.services.arena_model_cache",
+        "--hidden-import", "backend.services.arena_bridge_transport",
+        "--hidden-import", "backend.services.steel_orchestrator",
+        "--hidden-import", "backend.services.stealth_orchestrator",
+        "--hidden-import", "backend.services.chrome_launcher",
+        # -- shared --
+        "--hidden-import", "shared.arena_bridge_protocol",
+        # -- third-party (runtime-resolved) --
+        "--hidden-import", "playwright",
+        "--hidden-import", "playwright.async_api",
+        "--hidden-import", "playwright._impl._api_types",
+        "--hidden-import", "cloakbrowser",
+        "--collect-submodules", "playwright",
+        "--collect-submodules", "cloakbrowser",
         str(ENTRYPOINT),
     ]
     run(cmd)
 
     exe_name = f"{APP_NAME}.exe" if sys.platform.startswith("win") else APP_NAME
-    built = DIST_DIR / exe_name
-    if not built.exists():
-        print(f"Build succeeded but executable not found: {built}", file=sys.stderr)
+    built_dir = DIST_DIR / APP_NAME
+    if not built_dir.exists() or not (built_dir / exe_name).exists():
+        print(f"Build succeeded but output not found at: {built_dir / exe_name}", file=sys.stderr)
         return 1
 
-    output = SIDECAR_DIR / exe_name
-    shutil.copy2(built, output)
-    print(f"Sidecar ready: {output}")
+    # Remove stale onefile binary or old onedir output
+    for stale in [SIDECAR_DIR / exe_name, SIDECAR_DIR / APP_NAME]:
+        if stale.exists():
+            if stale.is_dir():
+                shutil.rmtree(stale)
+            else:
+                stale.unlink()
+
+    output_dir = SIDECAR_DIR / APP_NAME
+    shutil.copytree(built_dir, output_dir)
+    print(f"Sidecar ready: {output_dir}")
+
+    # --- Copy Arena Chrome extension into Tauri resources ---
+    ext_src = REPO_ROOT / "arena_extension"
+    ext_dst = REPO_ROOT / "src-tauri" / "extensions" / "arena"
+    if ext_src.exists():
+        if ext_dst.exists():
+            shutil.rmtree(ext_dst)
+        shutil.copytree(ext_src, ext_dst)
+        print(f"Arena extension bundled: {ext_dst}")
+    else:
+        print("Warning: arena_extension/ not found — extension not bundled", file=sys.stderr)
+
     return 0
 
 

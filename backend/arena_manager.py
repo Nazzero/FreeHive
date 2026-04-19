@@ -1,145 +1,231 @@
 """
-arena_manager.py — FreeHive v0.5.1
-Manages the ArenaPlaywrightAdapter lifecycle.
-Legacy LMArenaBridge code kept below as dead code — do not delete.
+arena_manager.py — FreeHive v0.7.1
+Manages Arena adapters: Extension Bridge (primary) + CloakBrowser (fallback).
 """
 
 import asyncio
 import logging
+import platform
 import subprocess
-from pathlib import Path
-
-from backend.services.arena_bridge_transport import is_bridge_available
 
 logger = logging.getLogger(__name__)
 
-ARENA_PROFILE_DIR = Path.home() / ".freehive" / "arena_profile"
-CDP_URL = "http://localhost:9222"
 
+def _kill_browser_processes():
+    """Kill stale CloakBrowser / Chromium processes (cross-platform)."""
+    try:
+        if platform.system() == "Windows":
+            for proc in ("chromium.exe", "chrome.exe"):
+                subprocess.run(
+                    ["taskkill", "/F", "/IM", proc],
+                    capture_output=True, timeout=5,
+                )
+        else:
+            subprocess.run(
+                ["pkill", "-f", "cloakbrowser|chromium-146"],
+                capture_output=True, timeout=3,
+            )
+    except Exception:
+        pass
 
-# ===========================================================================
-# NEW: Playwright-based Arena manager
-# ===========================================================================
 
 class ArenaManager:
     """
-    Manages the Arena Extension Bridge.
-    Called by router.py for /arena/* endpoints.
+    Lifecycle manager for the arena.ai adapter.
+
+    Transport priority:
+      1. Extension Bridge — Chrome extension + native messaging (fast, reliable)
+      2. CloakBrowser     — Stealth Chromium automation (fallback)
+
+    Setup (extension, recommended):
+        ./scripts/setup_arena_bridge.sh
+        Load extension in Chrome, open arena.ai tab, log in.
+
+    Setup (CloakBrowser, fallback):
+        pip install cloakbrowser>=0.3.25
+        Start backend → CloakBrowser Chrome window appears.
+        Sign in to arena.ai via Google OAuth in the browser window.
     """
 
     def __init__(self):
+        # Extension bridge adapter (primary)
         from backend.adapters.arena_bridge_adapter import ArenaBridgeAdapter
-        self._adapter = ArenaBridgeAdapter()
-        self._lock = asyncio.Lock()
-        self._running = True # Extension-based bridge is considered "running" if backend can talk to it
+        self._bridge_adapter = ArenaBridgeAdapter()
 
-    async def is_logged_in(self) -> bool:
-        """
-        Check if the extension bridge is active and responsive.
-        """
+        # CloakBrowser adapter (fallback) — lazy init to avoid import errors
+        self._cloakbrowser_adapter = None
+        try:
+            from backend.adapters.arena_steel_adapter import ArenaSteelAdapter
+            self._cloakbrowser_adapter = ArenaSteelAdapter()
+        except Exception as exc:
+            logger.info("[ArenaManager] CloakBrowser fallback not available: %s", exc)
+
+        self._lock = asyncio.Lock()
+        self._login_session_active = False
+
+    # ------------------------------------------------------------------
+    # Transport detection
+    # ------------------------------------------------------------------
+
+    def _is_bridge_available(self) -> bool:
+        from backend.services.arena_bridge_transport import is_bridge_available
         return is_bridge_available()
 
-    async def start(self, force_login: bool = False) -> dict:
-        """
-        In the extension model, 'starting' is just ensuring the browser is open.
-        If force_login is true, we can try to open the Arena tab.
-        """
-        async with self._lock:
-            # We assume Chrome is managed by the user or already running
-            # In the future, we could launch Chrome here if missing.
-            is_active = await self.is_logged_in()
-            return {
-                "status": "active" if is_active else "bridge_missing",
-                "bridge": True,
-                "login_required": not is_active, # TBD: real login check via bridge
-            }
+    @property
+    def active_transport(self) -> str:
+        """Return which transport is currently active."""
+        if self._is_bridge_available():
+            return "extension"
+        if self._cloakbrowser_adapter is not None:
+            return "cloakbrowser"
+        return "offline"
 
-    async def stop(self):
-        """No-op for extension-based bridge."""
-        logger.info("[ArenaManager] Stop requested (no-op for extension bridge)")
-
-    async def get_models(self) -> list[str]:
-        """Fetch models from bridge; fallback to static list if unavailable."""
-        if not self.get_status().get("bridge_active", False):
-            return _fallback_models()
-        try:
-            models = await self._adapter.fetch_models()
-            return models
-        except Exception as e:
-            logger.warning("[ArenaManager] Failed to fetch live models, using fallback: %s", e)
-        return _fallback_models()
-
-    def get_adapter(self):
-        """Return the live bridge adapter instance."""
-        return self._adapter
+    # ------------------------------------------------------------------
+    # Status
+    # ------------------------------------------------------------------
 
     def get_status(self) -> dict:
-        bridge_active = is_bridge_available()
+        transport = self.active_transport
         return {
-            "running": True,
-            "bridge_active": bridge_active,
+            "running": transport != "offline",
+            "bridge_active": self._is_bridge_available(),
+            "cloakbrowser_available": self._cloakbrowser_adapter is not None,
+            "transport": transport,
             "profile_present": True,
             "login_in_progress": False,
         }
 
+    async def is_logged_in(self) -> bool:
+        """Return True when any transport is available and authenticated."""
+        if self._is_bridge_available():
+            return True  # Extension in user's Chrome = already logged in
+        try:
+            if self._cloakbrowser_adapter and await self._cloakbrowser_adapter.is_available():
+                return await self._cloakbrowser_adapter.is_authenticated()
+        except Exception as exc:
+            logger.debug("[ArenaManager] is_logged_in check failed: %s", exc)
+        return False
+
+    # ------------------------------------------------------------------
+    # Lifecycle (kept for router.py compatibility)
+    # ------------------------------------------------------------------
+
+    async def start(self, force_login: bool = False) -> dict:
+        """Check transport availability and return status.
+
+        Extension bridge: just needs Chrome with extension + arena.ai tab.
+        CloakBrowser fallback: manages its own browser lifecycle.
+        """
+        async with self._lock:
+            # Extension bridge is the primary transport
+            if self._is_bridge_available():
+                return {
+                    "status": "active",
+                    "transport": "extension",
+                    "login_required": False,
+                    "message": None,
+                }
+
+            # CloakBrowser fallback
+            if self._cloakbrowser_adapter is not None:
+                try:
+                    available = await self._cloakbrowser_adapter.is_available()
+                except Exception:
+                    available = False
+
+                if available:
+                    if force_login:
+                        try:
+                            await self._cloakbrowser_adapter.close()
+                            _kill_browser_processes()
+                            from pathlib import Path
+                            profile = Path.home() / ".freehive" / "arena_profile"
+                            for lock in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+                                (profile / lock).unlink(missing_ok=True)
+
+                            orchestrator = self._cloakbrowser_adapter._orchestrator
+                            orchestrator._headless = False
+                            ctx = await orchestrator.get_or_create_context()
+                            page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+                            await page.goto("https://arena.ai/text/direct", wait_until="load", timeout=30000)
+                            self._login_session_active = True
+                            return {
+                                "status": "login_opened",
+                                "transport": "cloakbrowser",
+                                "login_required": True,
+                                "message": "Browser window opened. Sign in, then refresh.",
+                            }
+                        except Exception as exc:
+                            return {
+                                "status": "login_failed",
+                                "transport": "cloakbrowser",
+                                "login_required": True,
+                                "message": f"Could not open browser: {exc}",
+                            }
+
+                    logged_in = await self._cloakbrowser_adapter.is_authenticated()
+                    return {
+                        "status": "active" if logged_in else "login_required",
+                        "transport": "cloakbrowser",
+                        "login_required": not logged_in,
+                        "message": None if logged_in else "Log in to arena.ai in CloakBrowser window.",
+                    }
+
+            # Nothing available
+            return {
+                "status": "offline",
+                "transport": "offline",
+                "login_required": True,
+                "message": (
+                    "Arena is not available. Install the Chrome extension "
+                    "(./scripts/setup_arena_bridge.sh) or CloakBrowser "
+                    "(pip install cloakbrowser>=0.3.25)."
+                ),
+            }
+
+    async def stop(self):
+        """Disconnect from CloakBrowser."""
+        try:
+            await self._adapter.close()
+        except Exception as exc:
+            logger.debug("[ArenaManager] stop: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Models
+    # ------------------------------------------------------------------
+
+    async def get_models(self) -> list[str]:
+        """Fetch live model list. Extension bridge first, CloakBrowser fallback."""
+        if self._is_bridge_available():
+            try:
+                return await self._bridge_adapter.fetch_models()
+            except Exception as exc:
+                logger.warning("[ArenaManager] Extension bridge get_models failed: %s", exc)
+
+        if self._cloakbrowser_adapter is not None:
+            try:
+                if await self._cloakbrowser_adapter.is_available():
+                    return await self._cloakbrowser_adapter.fetch_models()
+            except Exception as exc:
+                logger.warning("[ArenaManager] CloakBrowser get_models failed: %s", exc)
+        return []
+
+    # ------------------------------------------------------------------
+    # Adapter access (used by session_manager.py)
+    # ------------------------------------------------------------------
+
+    def get_adapter(self):
+        """Return the best available adapter: extension first, CloakBrowser fallback."""
+        if self._is_bridge_available():
+            return self._bridge_adapter
+        if self._cloakbrowser_adapter is not None:
+            return self._cloakbrowser_adapter
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Fallback model list
+# ---------------------------------------------------------------------------
 
 def _fallback_models() -> list[str]:
-    return [
-        "arena/gpt-5.2-chat-latest",
-        "arena/gpt-4o",
-        "arena/gpt-4.5-preview",
-        "arena/gemini-3.1-pro",
-        "arena/gemini-2.0-flash-001",
-        "arena/gemini-2.5-pro-preview-03-25",
-        "arena/claude-opus-4-6",
-        "arena/claude-opus-4-6-thinking",
-        "arena/claude-3-7-sonnet-20250219",
-        "arena/claude-3-5-sonnet-20241022",
-        "arena/grok-3-beta",
-        "arena/grok-3-mini-beta",
-        "arena/deepseek-v3-0324",
-        "arena/deepseek-r1",
-        "arena/llama-4-maverick",
-        "arena/llama-4-scout",
-        "arena/mistral-large-2411",
-        "arena/qwen-max-2025-01-25",
-    ]
-
-
-# ===========================================================================
-# DEAD CODE — Legacy LMArenaBridge process manager
-# Do not delete. Not actively used in v0.5.1+.
-# ===========================================================================
-
-class _LegacyLMArenaBridgeManager:
-    """
-    LEGACY — Managed the LMArenaBridge subprocess that called arena.ai.
-    Broken as of early 2025 due to arena.ai domain migration + bot detection.
-    Kept for reference only.
-    """
-
-    def __init__(self):
-        self.process = None
-        self.bridge_path = Path.home() / "Ilee_AI" / "LMArenaBridge" / "src" / "main.py"
-
-    def start(self):
-        if self.process and self.process.poll() is None:
-            return {"status": "already_running"}
-        try:
-            self.process = subprocess.Popen(
-                ["python", str(self.bridge_path)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            return {"status": "started", "pid": self.process.pid}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
-
-    def stop(self):
-        if self.process:
-            self.process.terminate()
-            self.process = None
-        return {"status": "stopped"}
-
-    def is_running(self):
-        return self.process is not None and self.process.poll() is None
+    return []  # No guessing — slugs must come from the live arena.ai page
