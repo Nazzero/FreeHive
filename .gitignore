@@ -58,7 +58,10 @@ arena_extension_store.zip
 
 # Tests (not needed to compile)
 tests/
-docs/
+
+# Docs (except images used by README)
+docs/*
+!docs/images/
 
 # IDE
 .vscode/
