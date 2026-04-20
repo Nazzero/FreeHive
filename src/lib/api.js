@@ -211,6 +211,75 @@ export async function logoutTool(tool) {
 }
 
 /**
+ * Install a CLI tool via SSE stream (mirrors SetupScreen's install flow).
+ * @param {string} tool  "openclaude" | "claude_code" | "gemini_cli" | "chatgpt_cli"
+ * @param {(event: any) => void} [onEvent]
+ * @returns {Promise<any>}
+ */
+export async function installTool(tool, onEvent = () => {}) {
+    const res = await fetch(`${BASE_URL}/setup/install`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ tool }),
+    });
+    if (!res.ok) {
+        throw new Error(`Install request failed (${res.status})`);
+    }
+    if (!res.body) {
+        throw new Error('Backend did not provide an install stream.');
+    }
+
+    const terminal = new Set(['done', 'success', 'failed', 'timeout', 'error']);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    /** @type {any} */
+    let finalEvent = null;
+    let finished = false;
+
+    while (!finished) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let newlineIdx = buffer.indexOf('\n');
+        while (newlineIdx >= 0) {
+            const line = buffer.slice(0, newlineIdx).trim();
+            buffer = buffer.slice(newlineIdx + 1);
+            newlineIdx = buffer.indexOf('\n');
+
+            if (!line.startsWith('data:')) continue;
+            /** @type {any} */
+            let event = null;
+            try {
+                event = JSON.parse(line.slice(5).trim());
+            } catch {
+                continue;
+            }
+            onEvent(event);
+            if (terminal.has(String(event?.status || ''))) {
+                finalEvent = event;
+                finished = true;
+                break;
+            }
+        }
+    }
+
+    try {
+        await reader.cancel();
+    } catch {
+    }
+
+    if (!finalEvent) {
+        throw new Error('Install stream ended unexpectedly.');
+    }
+    if (!finalEvent.success && finalEvent.status !== 'success') {
+        throw new Error(finalEvent.msg || 'Installation failed.');
+    }
+    return finalEvent;
+}
+
+/**
  * @param {string} tool
  * @param {(event: any) => void} [onEvent]
  * @returns {Promise<any>}

@@ -1,6 +1,6 @@
 <script>
     import { createEventDispatcher, onMount } from 'svelte';
-    import { authenticateTool, getSetupStatus, logoutTool } from '$lib/api.js';
+    import { installTool, authenticateTool, getSetupStatus, logoutTool } from '$lib/api.js';
 
     const dispatch = createEventDispatcher();
 
@@ -11,7 +11,9 @@
     let success = '';
     let busyLogoutTool = '';
     let busyLoginTool = '';
+    let busyInstallTool = '';
     let loginProgress = '';
+    let installProgress = '';
     let loginElapsed = 0;
     /** @type {ReturnType<typeof setInterval> | null} */
     let loginTimerInterval = null;
@@ -148,7 +150,11 @@
      * @returns {string}
      */
     function loginButtonLabel(provider) {
-        if (!provider.installed) return 'Open Setup';
+        if (!provider.installed) {
+            if (provider.loginTool === 'chatgpt_cli') return 'Install Codex CLI';
+            if (provider.loginTool === 'gemini_cli') return 'Install Gemini CLI';
+            return 'Install CLI';
+        }
         if (provider.loginTool === 'openclaude') return 'Login via OpenClaude';
         if (provider.loginTool === 'claude_code') return 'Login via Claude Code';
         if (provider.loginTool === 'chatgpt_cli') return 'Login via Chatgpt';
@@ -257,6 +263,41 @@
     }
 
     /**
+     * Install a CLI tool inline, then auto-start authentication.
+     * @param {any} provider
+     * @param {string} tool
+     */
+    async function handleInstallAndAuth(provider, tool) {
+        busyInstallTool = tool;
+        installProgress = `Installing ${tool}...`;
+        error = '';
+        success = '';
+
+        try {
+            await installTool(tool, (event) => {
+                if (event?.msg && event?.status !== 'waiting') {
+                    installProgress = event.msg;
+                } else if (event?.status === 'starting') {
+                    installProgress = event.msg || 'Starting install...';
+                }
+            });
+
+            installProgress = 'Installed. Starting authentication...';
+            await fetchStatus({ silent: true });
+
+            // Auto-start auth after successful install
+            busyInstallTool = '';
+            installProgress = '';
+            await handleLogin(provider, tool);
+        } catch (e) {
+            error = /** @type {any} */ (e)?.message || `Failed to install CLI for ${provider.name}.`;
+        } finally {
+            busyInstallTool = '';
+            installProgress = '';
+        }
+    }
+
+    /**
      * @param {any} provider
      */
     async function handleLogin(provider, tool = provider.loginTool) {
@@ -265,11 +306,11 @@
                 ? provider.loginOptions.find((/** @type {any} */ o) => o.tool === tool)
                 : null;
             if (!option?.installed) {
-                dispatch('openSetup', { provider: provider.id });
+                await handleInstallAndAuth(provider, tool);
                 return;
             }
         } else if (!provider.installed) {
-            dispatch('openSetup', { provider: provider.id });
+            await handleInstallAndAuth(provider, tool);
             return;
         }
 
@@ -330,6 +371,12 @@
         <div class="alert success">{success}</div>
     {/if}
 
+    {#if busyInstallTool}
+        <div class="alert info">
+            {installProgress || 'Installing CLI...'}
+        </div>
+    {/if}
+
     {#if busyLoginTool}
         <div class="alert info">
             {loginProgress || 'Authenticating...'}
@@ -367,21 +414,29 @@
                                 <button
                                     class="action-btn {option.installed ? '' : 'ghost'}"
                                     on:click={() => handleLogin(provider, option.tool)}
-                                    disabled={!!busyLoginTool || !!busyLogoutTool}
+                                    disabled={!!busyLoginTool || !!busyLogoutTool || !!busyInstallTool}
                                 >
-                                    {#if busyLoginTool === option.tool}
+                                    {#if busyInstallTool === option.tool}
+                                        Installing...
+                                    {:else if busyLoginTool === option.tool}
                                         Logging in...
                                     {:else if option.installed}
                                         Login via {option.label}
                                     {:else}
-                                        Setup {option.label}
+                                        Install {option.label}
                                     {/if}
                                 </button>
                             {/each}
                         </div>
                     {:else}
-                        <button class="action-btn" on:click={() => handleLogin(provider)} disabled={!!busyLoginTool || !!busyLogoutTool}>
-                            {busyLoginTool === provider.loginTool ? 'Logging in...' : loginButtonLabel(provider)}
+                        <button class="action-btn" on:click={() => handleLogin(provider)} disabled={!!busyLoginTool || !!busyLogoutTool || !!busyInstallTool}>
+                            {#if busyInstallTool === provider.loginTool}
+                                Installing...
+                            {:else if busyLoginTool === provider.loginTool}
+                                Logging in...
+                            {:else}
+                                {loginButtonLabel(provider)}
+                            {/if}
                         </button>
                     {/if}
                 </div>
