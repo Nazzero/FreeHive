@@ -26,8 +26,10 @@ are collected from the WebSocket stream and returned in Chat Completions format.
 Falls back to ChatGPTAdapter (codex exec subprocess) only on persistent failures.
 """
 
+import asyncio
 import json
 import logging
+import random
 import time
 import uuid
 from pathlib import Path
@@ -36,10 +38,15 @@ import websockets
 import websockets.exceptions
 
 from backend.adapters.chatgpt_adapter import ChatGPTAdapter
+from backend.resilience.cli_introspection import get_codex_config
 
 AUTH_FILE = Path.home() / ".codex" / "auth.json"
-WS_URL = "wss://chatgpt.com/backend-api/codex/responses"
 DEFAULT_MODEL = "gpt-5.2"
+
+
+def _get_codex_cfg():
+    """Get dynamically extracted Codex CLI config."""
+    return get_codex_config()
 
 # Reopen before the server's 60-minute connection limit
 _WS_MAX_AGE_SECONDS = 55 * 60
@@ -274,6 +281,23 @@ class ChatGPTDirectAdapter:
             )
             return _result_to_chat_completions(result, self._model)
         except Exception as exc:
+            logger.warning("[ChatGPTDirect] raw_request WS failed, trying subprocess: %s", exc)
+            await self._close_ws()
+            # Fallback: extract last user message and use subprocess
+            last_user = ""
+            for m in reversed(messages):
+                if m.get("role") == "user":
+                    c = m.get("content", "")
+                    last_user = c if isinstance(c, str) else str(c)
+                    break
+            if last_user:
+                try:
+                    text = await self._fallback.send_message(last_user)
+                    return _result_to_chat_completions(
+                        {"text": text, "function_calls": []}, self._model
+                    )
+                except Exception:
+                    pass
             raise RuntimeError(f"ChatGPT request failed: {exc}") from exc
 
     async def close(self):
@@ -332,17 +356,22 @@ class ChatGPTDirectAdapter:
         if self._ws_is_alive():
             return
         await self._close_ws()
+        cfg = _get_codex_cfg()
         headers = {
             "Authorization": f"Bearer {token}",
-            "originator": "codex_cli_rs",
-            "OpenAI-Beta": "responses_websockets=2026-02-06",
+            "originator": cfg["originator"],
+            "OpenAI-Beta": cfg["beta_header"],
             "x-client-request-id": str(uuid.uuid4()),
             "session_id": self._session_id,
         }
         if account_id:
             headers["ChatGPT-Account-ID"] = account_id
+
+        # Anti-fingerprint jitter
+        await asyncio.sleep(random.uniform(0.05, 0.15))
+
         self._ws = await websockets.connect(
-            WS_URL,
+            cfg["ws_url"],
             additional_headers=headers,
             open_timeout=20,
         )

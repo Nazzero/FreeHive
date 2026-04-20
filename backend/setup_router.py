@@ -38,6 +38,7 @@ FREEHIVE_CONFIG_DIR = Path.home() / ".freehive"
 FREEHIVE_CONFIG_FILE = FREEHIVE_CONFIG_DIR / "config.json"
 
 IS_WINDOWS = os.name == "nt"
+IS_MACOS = sys.platform == "darwin"
 HAS_PTY_SUPPORT = (not IS_WINDOWS) and (pty is not None) and (fcntl is not None)
 
 # Use login shell for UNIX so nvm/pyenv/etc are sourced.
@@ -543,6 +544,195 @@ async def install_tool(request: InstallRequest):
                 "success": False,
                 "msg": "Install failed. Make sure Node.js and npm are installed.",
             })
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+_node_install_lock = False
+
+_NODE_INSTALL_TIMEOUT = 300  # 5 minutes max for entire install
+
+
+async def _run_with_timeout(cmd, timeout, stream_cb, env=None):
+    """Run subprocess with timeout. Collects lines via stream_cb. Returns exit code."""
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        env=env,
+    )
+    try:
+        async def _drain():
+            async for raw in process.stdout:
+                line = _strip_ansi(raw.decode(errors="replace").strip())
+                if line:
+                    stream_cb(line)
+            await process.wait()
+
+        await asyncio.wait_for(_drain(), timeout=timeout)
+        return process.returncode
+    except asyncio.TimeoutError:
+        try:
+            process.kill()
+            await process.wait()
+        except Exception:
+            pass
+        return -1
+
+
+@setup_router.post("/setup/install-node")
+async def install_node():
+    """Install Node.js via nvm (Linux/macOS) or fnm (Windows)."""
+    global _node_install_lock
+
+    if _node_install_lock:
+        return StreamingResponse(
+            _single_event({"status": "done", "success": False,
+                           "msg": "Installation already in progress."}),
+            media_type="text/event-stream",
+        )
+
+    # Skip if already installed
+    if _is_installed("node") and _is_installed("npm"):
+        return StreamingResponse(
+            _single_event({"status": "done", "success": True,
+                           "msg": "Node.js and npm are already installed."}),
+            media_type="text/event-stream",
+        )
+
+    async def stream():
+        global _node_install_lock
+        _node_install_lock = True
+        lines = []
+
+        def collect(line):
+            lines.append(line)
+
+        try:
+            yield _sse({"status": "starting", "msg": "Detecting platform..."})
+
+            if IS_WINDOWS:
+                yield _sse({"status": "output", "msg": "Windows detected — installing fnm (Fast Node Manager)..."})
+
+                # Step 1: install fnm
+                rc = await _run_with_timeout(
+                    ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                     "irm https://fnm.vercel.app/install.ps1 | iex"],
+                    timeout=120, stream_cb=collect,
+                )
+                for l in lines:
+                    yield _sse({"status": "output", "msg": l})
+                lines.clear()
+
+                if rc == -1:
+                    yield _sse({"status": "done", "success": False,
+                                "msg": "fnm installation timed out. Check your network connection."})
+                    return
+                if rc != 0:
+                    yield _sse({"status": "done", "success": False,
+                                "msg": "fnm installation failed."})
+                    return
+
+                # Step 2: install Node LTS via fnm
+                # fnm installs to %USERPROFILE%\.fnm — refresh PATH for this session
+                yield _sse({"status": "output", "msg": "Installing Node.js LTS via fnm..."})
+                fnm_path = Path.home() / ".fnm"
+                path_env = os.environ.get("PATH", "")
+                env = {**os.environ, "PATH": f"{fnm_path}{os.pathsep}{path_env}"}
+
+                rc = await _run_with_timeout(
+                    ["cmd", "/c",
+                     "fnm install --lts && fnm default lts-latest"],
+                    timeout=180, stream_cb=collect, env=env,
+                )
+                for l in lines:
+                    yield _sse({"status": "output", "msg": l})
+                lines.clear()
+
+                if rc == -1:
+                    yield _sse({"status": "done", "success": False,
+                                "msg": "Node.js installation timed out."})
+                    return
+                if rc != 0:
+                    yield _sse({"status": "done", "success": False,
+                                "msg": "Node.js installation via fnm failed."})
+                    return
+
+            else:
+                # Linux / macOS — use nvm
+                if not shutil.which("curl"):
+                    yield _sse({"status": "done", "success": False,
+                                "msg": "curl is required but not found. Install curl first."})
+                    return
+
+                yield _sse({"status": "output",
+                            "msg": f"{'macOS' if IS_MACOS else 'Linux'} detected — installing nvm..."})
+
+                # Check if nvm already installed
+                nvm_dir = Path.home() / ".nvm"
+                if (nvm_dir / "nvm.sh").exists():
+                    yield _sse({"status": "output", "msg": "nvm already installed, skipping download..."})
+                else:
+                    # Step 1: install nvm
+                    rc = await _run_with_timeout(
+                        ["bash", "-c",
+                         "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash"],
+                        timeout=120, stream_cb=collect,
+                    )
+                    for l in lines:
+                        yield _sse({"status": "output", "msg": l})
+                    lines.clear()
+
+                    if rc == -1:
+                        yield _sse({"status": "done", "success": False,
+                                    "msg": "nvm installation timed out. Check your network connection."})
+                        return
+                    if rc != 0:
+                        yield _sse({"status": "done", "success": False,
+                                    "msg": "nvm installation failed."})
+                        return
+
+                # Step 2: install Node LTS via nvm
+                # Source nvm explicitly in case .bashrc has non-interactive guard
+                yield _sse({"status": "output", "msg": "Installing Node.js LTS via nvm..."})
+                nvm_cmd = (
+                    'export NVM_DIR="$HOME/.nvm" && '
+                    '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && '
+                    'nvm install --lts'
+                )
+                rc = await _run_with_timeout(
+                    ["bash", "-c", nvm_cmd],
+                    timeout=180, stream_cb=collect,
+                )
+                for l in lines:
+                    yield _sse({"status": "output", "msg": l})
+                lines.clear()
+
+                if rc == -1:
+                    yield _sse({"status": "done", "success": False,
+                                "msg": "Node.js installation timed out. Check your network connection."})
+                    return
+                if rc != 0:
+                    yield _sse({"status": "done", "success": False,
+                                "msg": "Node.js installation via nvm failed."})
+                    return
+
+            # Verify
+            node_ok = _is_installed("node")
+            npm_ok = _is_installed("npm")
+            if node_ok and npm_ok:
+                yield _sse({"status": "done", "success": True,
+                            "msg": "Node.js and npm installed successfully."})
+            else:
+                yield _sse({"status": "done", "success": False,
+                            "msg": ("Installation completed but node/npm not found in PATH. "
+                                    "You may need to restart the app.")})
+        except Exception as exc:
+            logger.exception("install-node failed")
+            yield _sse({"status": "done", "success": False,
+                        "msg": f"Unexpected error: {exc}"})
+        finally:
+            _node_install_lock = False
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 

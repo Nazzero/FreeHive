@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-CODEX_WORKDIR = Path.home() / "Ilee_AI"
+CODEX_WORKDIR = Path.home() / "FreeHive"
 DEFAULT_MODEL = "gpt-5.2"
 
 

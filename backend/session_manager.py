@@ -171,12 +171,17 @@ class SessionManager:
     # ------------------------------------------------------------------
 
     def _make_adapter(self, model: str):
-        """Instantiate the right adapter for the given model string.
+        """Instantiate the right adapter cascade for the given model string.
 
-        Accepts both short names ('claude', 'chatgpt', 'gemini') and full
-        model strings ('claude-haiku-4-5', 'gpt-5.2', 'gemini-3-flash-preview').
-        Full model strings are passed through to the adapter as a model override.
+        Each provider adapter is wrapped in a cascade with fallback strategies.
+        Arena sessions are handled separately (shared instance via ArenaManager).
         """
+        from backend.resilience.cascade_factory import (
+            build_claude_cascade,
+            build_chatgpt_cascade,
+            build_gemini_cascade,
+        )
+
         m = model.lower()
 
         # Arena models MUST be checked first — arena model names like
@@ -184,8 +189,6 @@ class SessionManager:
         if model.startswith("arena/") or m.startswith("arena/"):
             if not self._arena_enabled:
                 raise RuntimeError("Arena is disabled in this build.")
-            # All arena/* sessions share the single Playwright Chromium context.
-            # The adapter is retrieved from ArenaManager, not instantiated fresh.
             if self._arena_manager is None:
                 raise RuntimeError(
                     "ArenaManager not set on SessionManager. "
@@ -200,16 +203,13 @@ class SessionManager:
             return adapter
 
         elif m == "claude" or m.startswith("claude-"):
-            from backend.adapters.claude_direct_adapter import ClaudeDirectAdapter
-            return ClaudeDirectAdapter(model=None if m == "claude" else model)
+            return build_claude_cascade(model=None if m == "claude" else model)
 
         elif m == "chatgpt" or any(m.startswith(p) for p in ("gpt-", "o1-", "o3-", "o4-", "codex-")) or m in ("gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2-codex"):
-            from backend.adapters.chatgpt_direct_adapter import ChatGPTDirectAdapter
-            return ChatGPTDirectAdapter(model=None if m == "chatgpt" else model)
+            return build_chatgpt_cascade(model=None if m == "chatgpt" else model)
 
         elif m == "gemini" or m.startswith("gemini-"):
-            from backend.adapters.gemini_direct_adapter import GeminiDirectAdapter
-            return GeminiDirectAdapter(model=None if m == "gemini" else model)
+            return build_gemini_cascade(model=None if m == "gemini" else model)
 
         else:
             raise ValueError(f"Unknown model: '{model}'")
