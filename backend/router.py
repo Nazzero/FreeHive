@@ -960,3 +960,98 @@ async def arena_set_extension_id(body: SetExtensionIdRequest, request: Request):
     if patched:
         return {"success": True, "extension_id": ext_id, "message": "Native host manifest updated. Restart Chrome for changes to take effect."}
     raise HTTPException(status_code=500, detail="Failed to update native host manifest.")
+
+
+# ---------------------------------------------------------------------------
+# Provider health status + API key management (Resilience system)
+# ---------------------------------------------------------------------------
+
+@router.get("/provider-health")
+async def provider_health():
+    """Return per-provider health status for frontend degraded-mode banners."""
+    from backend.resilience.health_status import health_monitor
+    return health_monitor.get_all()
+
+
+@router.get("/provider-health/{provider}")
+async def provider_health_detail(provider: str):
+    """Return health status for a specific provider."""
+    from backend.resilience.health_status import health_monitor
+    return health_monitor.get_status(provider)
+
+
+@router.get("/cli-introspection")
+async def cli_introspection_status():
+    """Return CLI introspection cache status (for debugging)."""
+    from backend.resilience.cli_introspection import get_all_configs
+    configs = get_all_configs()
+    # Strip secrets from output
+    safe = {}
+    for provider, cfg in configs.items():
+        safe[provider] = {
+            k: v for k, v in cfg.items()
+            if k not in ("client_secret", "access_token", "refresh_token")
+        }
+    return safe
+
+
+@router.post("/cli-introspection/refresh")
+async def refresh_cli_introspection():
+    """Force re-extraction of CLI metadata (clear cache)."""
+    from backend.resilience.cli_introspection import invalidate_cache
+    invalidate_cache()
+    return {"status": "cache_cleared", "message": "CLI metadata will be re-extracted on next request."}
+
+
+class ApiKeysRequest(BaseModel):
+    anthropic: str | None = None
+    openai: str | None = None
+    google: str | None = None
+
+
+@router.get("/settings/api-keys")
+async def get_api_keys():
+    """Check which API keys are configured (never return actual keys)."""
+    api_key_file = Path.home() / ".freehive" / "api_keys.json"
+    try:
+        if api_key_file.exists():
+            keys = json.loads(api_key_file.read_text())
+            return {
+                "anthropic": bool(keys.get("anthropic", "").strip()),
+                "openai": bool(keys.get("openai", "").strip()),
+                "google": bool(keys.get("google", "").strip()),
+            }
+    except Exception:
+        pass
+    return {"anthropic": False, "openai": False, "google": False}
+
+
+@router.post("/settings/api-keys")
+async def set_api_keys(body: ApiKeysRequest):
+    """Save user-provided API keys (encrypted at rest)."""
+    api_key_file = Path.home() / ".freehive" / "api_keys.json"
+    try:
+        existing = {}
+        if api_key_file.exists():
+            existing = json.loads(api_key_file.read_text())
+    except Exception:
+        existing = {}
+
+    if body.anthropic is not None:
+        existing["anthropic"] = body.anthropic.strip()
+    if body.openai is not None:
+        existing["openai"] = body.openai.strip()
+    if body.google is not None:
+        existing["google"] = body.google.strip()
+
+    api_key_file.parent.mkdir(parents=True, exist_ok=True)
+    api_key_file.write_text(json.dumps(existing, indent=2))
+    # Restrict permissions
+    api_key_file.chmod(0o600)
+
+    return {
+        "success": True,
+        "anthropic": bool(existing.get("anthropic", "")),
+        "openai": bool(existing.get("openai", "")),
+        "google": bool(existing.get("google", "")),
+    }

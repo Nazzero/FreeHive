@@ -111,6 +111,75 @@
     $: anyConnected = connectedProviders > 0;
     $: canInstall = status.prerequisites?.npm && status.prerequisites?.node;
 
+    // ── Node.js install state ─────────────────────────────────────────────
+    let nodeInstalling = false;
+    /** @type {string[]} */
+    let nodeInstallLog = [];
+    let nodeInstallFailed = false;
+
+    /** @type {HTMLDivElement|null} */
+    let nodeLogEl = null;
+
+    function scrollNodeLog() {
+        if (nodeLogEl) nodeLogEl.scrollTop = nodeLogEl.scrollHeight;
+    }
+
+    async function installNode() {
+        if (nodeInstalling) return; // prevent double-click
+        nodeInstalling = true;
+        nodeInstallLog = ['Detecting platform...'];
+        nodeInstallFailed = false;
+
+        try {
+            const res = await fetch(`${BASE_URL}/setup/install-node`, { method: 'POST' });
+
+            if (!res.ok) {
+                nodeInstalling = false;
+                nodeInstallFailed = true;
+                nodeInstallLog = [...nodeInstallLog, `Backend error: ${res.status} ${res.statusText}`];
+                return;
+            }
+            if (!res.body) {
+                nodeInstalling = false;
+                nodeInstallFailed = true;
+                nodeInstallLog = [...nodeInstallLog, 'No response body from backend.'];
+                return;
+            }
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                const chunk = decoder.decode(value);
+                for (const line of chunk.split('\n')) {
+                    if (!line.startsWith('data:')) continue;
+                    let data;
+                    try { data = JSON.parse(line.slice(5).trim()); } catch { continue; }
+
+                    if (data.msg) {
+                        nodeInstallLog = [...nodeInstallLog, data.msg];
+                        // Auto-scroll after Svelte updates DOM
+                        setTimeout(scrollNodeLog, 0);
+                    }
+                    if (data.status === 'done') {
+                        nodeInstalling = false;
+                        nodeInstallFailed = !data.success;
+                        await fetchStatus();
+                    }
+                }
+            }
+        } catch (e) {
+            nodeInstalling = false;
+            nodeInstallFailed = true;
+            const msg = e instanceof TypeError
+                ? 'Cannot reach backend. Is it running?'
+                : `Error: ${e.message || e}`;
+            nodeInstallLog = [...nodeInstallLog, msg];
+        }
+    }
+
     // ── SSE stream helpers ────────────────────────────────────────────────
 
     /**
@@ -265,23 +334,57 @@
                                 {status.prerequisites.node ? '&#10003;' : '&#10007;'}
                             </span>
                             <span class="prereq-name">Node.js</span>
-                            {#if !status.prerequisites.node}
-                                <span class="prereq-hint">Install from nodejs.org or via nvm</span>
-                            {/if}
                         </div>
                         <div class="prereq-row">
                             <span class="check {status.prerequisites.npm ? 'ok' : 'fail'}">
                                 {status.prerequisites.npm ? '&#10003;' : '&#10007;'}
                             </span>
                             <span class="prereq-name">npm</span>
-                            {#if !status.prerequisites.npm}
-                                <span class="prereq-hint">Comes with Node.js</span>
-                            {/if}
                         </div>
                     </div>
-                    <div class="prereq-warn">
-                        Node.js and npm are required before connecting any provider.
-                    </div>
+
+                    {#if !nodeInstalling && !nodeInstallFailed && nodeInstallLog.length === 0}
+                        <div class="prereq-actions">
+                            <button class="action-btn primary" on:click={installNode} disabled={nodeInstalling}>
+                                Install Node.js
+                            </button>
+                            <span class="prereq-method">
+                                via {typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows') ? 'fnm' : 'nvm'} — no admin required
+                            </span>
+                        </div>
+                        <div class="prereq-warn">
+                            Node.js and npm are required before connecting any provider.
+                        </div>
+                    {/if}
+
+                    {#if nodeInstallLog.length > 0}
+                        <div class="log" bind:this={nodeLogEl}>
+                            {#each nodeInstallLog as line}
+                                <div class="log-line">{line}</div>
+                            {/each}
+                        </div>
+                    {/if}
+
+                    {#if nodeInstalling}
+                        <div class="spinner-row">
+                            <span class="spinner"></span>
+                            <span class="spinner-label">Installing Node.js...</span>
+                        </div>
+                    {/if}
+
+                    {#if nodeInstallFailed && !nodeInstalling}
+                        <div class="retry-section">
+                            <span class="retry-hint">Installation failed. Check the log above.</span>
+                            <div class="prereq-actions">
+                                <button class="action-btn outline" on:click={installNode}>
+                                    Try Again
+                                </button>
+                                <a class="action-btn outline" href="https://nodejs.org" target="_blank" rel="noopener">
+                                    Download from nodejs.org
+                                </a>
+                            </div>
+                        </div>
+                    {/if}
                 </div>
             {/if}
 
@@ -564,6 +667,17 @@
         background: var(--bg-tertiary);
         border-radius: 8px;
         padding: 10px 14px;
+    }
+
+    .prereq-actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .prereq-method {
+        font-size: 12px;
+        color: var(--text-secondary);
     }
 
     /* Provider list */

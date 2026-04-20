@@ -121,9 +121,21 @@ def _get_api_key(request: Request) -> str:
 
 def _adapter_for_model_id(model_id: str):
     """
-    Instantiate the right adapter for an exact model ID string.
-    Returns (adapter_instance, provider_name).
+    Instantiate the right adapter cascade for an exact model ID string.
+    Returns (adapter_cascade_or_instance, provider_name).
+
+    Each provider adapter is wrapped in a cascade with fallback strategies:
+      Claude:  direct_oauth → subprocess_cli → user_api_key
+      ChatGPT: direct_ws → rest_fallback → user_api_key
+      Gemini:  direct_codeassist → subprocess_cli → user_api_key
+      Arena:   direct (already has 4 internal fallback layers)
     """
+    from backend.resilience.cascade_factory import (
+        build_claude_cascade,
+        build_chatgpt_cascade,
+        build_gemini_cascade,
+    )
+
     m = model_id.lower()
     # Arena MUST be checked first — arena models like "arena/claude-*" or "arena/gpt-*"
     # would otherwise match provider prefixes
@@ -133,17 +145,16 @@ def _adapter_for_model_id(model_id: str):
         adapter._model = model_id
         return adapter, "arena"
     if m == "claude" or m.startswith("claude-"):
-        from backend.adapters.claude_direct_adapter import ClaudeDirectAdapter
-        return ClaudeDirectAdapter(model=None if m == "claude" else model_id), "claude"
+        model = None if m == "claude" else model_id
+        return build_claude_cascade(model=model), "claude"
     if m == "chatgpt" or any(m.startswith(p) for p in ("gpt-", "o1-", "o3-", "o4-", "codex-", "chatgpt")):
-        from backend.adapters.chatgpt_direct_adapter import ChatGPTDirectAdapter
-        return ChatGPTDirectAdapter(model=None if m == "chatgpt" else model_id), "chatgpt"
+        model = None if m == "chatgpt" else model_id
+        return build_chatgpt_cascade(model=model), "chatgpt"
     if m == "gemini" or m.startswith("gemini-"):
-        from backend.adapters.gemini_direct_adapter import GeminiDirectAdapter
-        return GeminiDirectAdapter(model=None if m == "gemini" else model_id), "gemini"
-    # Unknown model — default to claude
-    from backend.adapters.claude_direct_adapter import ClaudeDirectAdapter
-    return ClaudeDirectAdapter(), "claude"
+        model = None if m == "gemini" else model_id
+        return build_gemini_cascade(model=model), "gemini"
+    # Unknown model — default to claude cascade
+    return build_claude_cascade(), "claude"
 
 
 def _model_matches_provider(model: str, provider: str) -> bool:
