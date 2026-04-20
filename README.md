@@ -439,7 +439,7 @@ npm run tauri build -- --bundles deb,rpm
 ## Project Structure
 
 ```
-Ilee_AI/
+FreeHive/
 ├── backend/
 │   ├── main.py                    # FastAPI entry, CORS, router registration
 │   ├── router.py                  # UI API: sessions, chat, arena control
