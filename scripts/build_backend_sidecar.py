@@ -99,6 +99,9 @@ def main() -> int:
         "--hidden-import", "cloakbrowser",
         "--collect-submodules", "playwright",
         "--collect-submodules", "cloakbrowser",
+        # -- bundle arena extension + native host so chrome_launcher.py can find them --
+        "--add-data", f"{REPO_ROOT / 'arena_extension'}{os.pathsep}arena_extension",
+        "--add-data", f"{REPO_ROOT / 'native_host'}{os.pathsep}native_host",
         str(ENTRYPOINT),
     ]
     run(cmd)

@@ -14,13 +14,20 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Extension dir relative to project root
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-EXTENSION_DIR = _PROJECT_ROOT / "arena_extension"
+# Extension dir — handle both dev and PyInstaller-bundled layouts
+if getattr(sys, "frozen", False):
+    # PyInstaller onedir: data lives under sys._MEIPASS
+    _BUNDLE_ROOT = Path(sys._MEIPASS)
+    _PROJECT_ROOT = _BUNDLE_ROOT
+    EXTENSION_DIR = _BUNDLE_ROOT / "arena_extension"
+else:
+    _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+    EXTENSION_DIR = _PROJECT_ROOT / "arena_extension"
 
 # Where native host manifest should live
 NATIVE_HOST_NAME = "com.freehive.arena_bridge"
