@@ -12,24 +12,14 @@
     // ── Provider definitions ──────────────────────────────────────────────
     /** @type {Record<string, any>} */
     const PROVIDERS = {
-        openclaude: {
-            name: 'OpenClaude',
-            provider: 'Claude',
-            logo: '/logos/claude.png',
-            tag: 'Free access',
-            tagColor: 'green',
-            headline: 'Use any claude.ai account',
-            desc: 'Open-source fork of Claude Code CLI. Works with free or Pro accounts.',
-            warn: null,
-        },
         claude_code: {
-            name: 'Claude Code',
+            name: 'Claude',
             provider: 'Claude',
             logo: '/logos/claude.png',
-            tag: 'Pro required',
+            tag: 'Subscription required',
             tagColor: 'yellow',
-            headline: 'Official Anthropic CLI',
-            desc: 'Maintained directly by Anthropic. Requires Claude Pro ($20/mo).',
+            headline: 'Anthropic Claude CLI',
+            desc: 'Requires an active Claude Pro, Team, or Enterprise subscription.',
             warn: 'Free accounts will fail at auth.',
         },
         gemini_cli: {
@@ -58,7 +48,6 @@
     /** @type {any} */
     let status = {
         prerequisites: { node: false, npm: false, ripgrep: false },
-        openclaude: { installed: false, authenticated: false, tier: null, account_label: null },
         claude_code: { installed: false, authenticated: false, tier: null, account_label: null },
         gemini_cli: { installed: false, authenticated: false, account_label: null },
         chatgpt_cli: { installed: false, authenticated: false, tier: null, account_label: null },
@@ -72,7 +61,6 @@
 
     /** @type {Record<string, any>} */
     let toolState = {
-        openclaude: { installing: false, authing: false, log: [], failed: false },
         claude_code: { installing: false, authing: false, log: [], failed: false },
         gemini_cli: { installing: false, authing: false, log: [], failed: false },
         chatgpt_cli: { installing: false, authing: false, log: [], failed: false },
@@ -111,12 +99,11 @@
     fetchStatus();
 
     // ── Computed ──────────────────────────────────────────────────────────
-    $: connectedCount = ['openclaude', 'claude_code', 'gemini_cli', 'chatgpt_cli']
+    $: connectedCount = ['claude_code', 'gemini_cli', 'chatgpt_cli']
         .filter((k) => status[k]?.authenticated).length;
-    // Claude shares auth — count as one provider
     $: connectedProviders = (() => {
         const set = new Set();
-        if (status.openclaude?.authenticated || status.claude_code?.authenticated) set.add('claude');
+        if (status.claude_code?.authenticated) set.add('claude');
         if (status.gemini_cli?.authenticated) set.add('gemini');
         if (status.chatgpt_cli?.authenticated) set.add('chatgpt');
         return set.size;
@@ -307,7 +294,6 @@
                     {@const ts = toolState[key]}
                     {@const isExpanded = expandedTool === key}
                     {@const isBusy = ts.installing || ts.authing}
-                    {@const needsRipgrep = key === 'openclaude' && !status.prerequisites.ripgrep}
 
                     <div class="provider-card {s.authenticated ? 'connected' : ''} {isExpanded ? 'expanded' : ''}">
                         <button class="provider-row" on:click={() => toggleExpanded(key)}>
@@ -343,17 +329,6 @@
                                     <div class="detail-warn">{meta.warn}</div>
                                 {/if}
 
-                                {#if needsRipgrep && !s.authenticated}
-                                    <div class="ripgrep-warn">
-                                        <span class="rg-label">ripgrep required</span>
-                                        <div class="rg-commands">
-                                            <code class="prereq-cmd">{rgHint}</code>
-                                            <span class="rg-alt">{rgHintAlt}</span>
-                                        </div>
-                                        <span class="rg-note">Install ripgrep, then click Refresh below.</span>
-                                    </div>
-                                {/if}
-
                                 <!-- Action buttons -->
                                 <div class="detail-actions">
                                     {#if s.authenticated}
@@ -363,9 +338,9 @@
                                     {:else if !s.installed}
                                         <button
                                             class="action-btn primary"
-                                            disabled={!canInstall || isBusy || (needsRipgrep)}
+                                            disabled={!canInstall || isBusy}
                                             on:click|stopPropagation={() => install(key)}
-                                            title={!canInstall ? 'Install Node.js and npm first' : needsRipgrep ? 'Install ripgrep first' : ''}
+                                            title={!canInstall ? 'Install Node.js and npm first' : ''}
                                         >
                                             {isBusy ? 'Installing...' : `Install ${meta.name}`}
                                         </button>

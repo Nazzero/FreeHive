@@ -44,32 +44,14 @@
      * @returns {any[]}
      */
     function toProviders(current) {
-        const openclaude = current?.openclaude || {};
         const claudeCode = current?.claude_code || {};
         const gemini = current?.gemini_cli || {};
         const chatgpt = current?.chatgpt_cli || {};
-        const selectedTool = current?.selected_tool || null;
 
-        const activeClaudeTools = [];
-        if (openclaude.authenticated) activeClaudeTools.push('OpenClaude CLI');
-        if (claudeCode.authenticated) activeClaudeTools.push('Claude Code CLI');
-        const claudeTier = openclaude.tier || claudeCode.tier || null;
-        const claudeInstalled = Boolean(openclaude.installed || claudeCode.installed);
-        const claudeLoginTool = (
-            selectedTool === 'openclaude' || selectedTool === 'claude_code'
-                ? selectedTool
-                : openclaude.installed
-                ? 'openclaude'
-                : claudeCode.installed
-                ? 'claude_code'
-                : 'openclaude'
-        );
+        const claudeInstalled = Boolean(claudeCode.installed);
         const claudeAccount = (
-            openclaude.account_email
-            || claudeCode.account_email
-            || openclaude.account_label
+            claudeCode.account_email
             || claudeCode.account_label
-            || openclaude.account_name
             || claudeCode.account_name
             || null
         );
@@ -90,20 +72,16 @@
             {
                 id: 'claude',
                 name: 'Claude',
-                authenticated: activeClaudeTools.length > 0,
+                authenticated: Boolean(claudeCode.authenticated),
                 installed: claudeInstalled,
-                tier: claudeTier,
-                detail: activeClaudeTools.length > 0
+                tier: claudeCode.tier || null,
+                detail: claudeCode.authenticated
                     ? (claudeAccount
-                        ? `Connected as ${claudeAccount} via ${activeClaudeTools.join(' + ')}`
-                        : `Connected via ${activeClaudeTools.join(' + ')} (account email unavailable token)`)
-                    : (claudeInstalled ? 'CLI installed, not authenticated' : 'CLI not installed'),
+                        ? `Connected as ${claudeAccount}`
+                        : 'Connected via Claude Code CLI')
+                    : (claudeInstalled ? 'CLI installed, not authenticated' : 'CLI not installed — subscription required'),
                 logoutTool: 'claude',
-                loginTool: claudeLoginTool,
-                loginOptions: [
-                    { tool: 'openclaude', label: 'OpenClaude', installed: Boolean(openclaude.installed) },
-                    { tool: 'claude_code', label: 'Claude Code', installed: Boolean(claudeCode.installed) },
-                ],
+                loginTool: 'claude_code',
             },
             {
                 id: 'chatgpt',
@@ -151,15 +129,15 @@
      */
     function loginButtonLabel(provider) {
         if (!provider.installed) {
+            if (provider.loginTool === 'claude_code') return 'Install Claude CLI';
             if (provider.loginTool === 'chatgpt_cli') return 'Install Codex CLI';
             if (provider.loginTool === 'gemini_cli') return 'Install Gemini CLI';
             return 'Install CLI';
         }
-        if (provider.loginTool === 'openclaude') return 'Login via OpenClaude';
-        if (provider.loginTool === 'claude_code') return 'Login via Claude Code';
-        if (provider.loginTool === 'chatgpt_cli') return 'Login via Chatgpt';
+        if (provider.loginTool === 'claude_code') return 'Login via Claude';
+        if (provider.loginTool === 'chatgpt_cli') return 'Login via ChatGPT';
         if (provider.loginTool === 'gemini_cli') return 'Login via Gemini';
-        return 'Login via Provider';
+        return 'Login';
     }
 
     /**
@@ -178,14 +156,9 @@
     function optimisticLogout(current, tool) {
         if (!current) return current;
 
-        if (tool === 'claude' || tool === 'openclaude' || tool === 'claude_code') {
+        if (tool === 'claude' || tool === 'claude_code') {
             return {
                 ...current,
-                openclaude: {
-                    ...(current.openclaude || {}),
-                    authenticated: false,
-                    tier: null,
-                },
                 claude_code: {
                     ...(current.claude_code || {}),
                     authenticated: false,
@@ -301,15 +274,7 @@
      * @param {any} provider
      */
     async function handleLogin(provider, tool = provider.loginTool) {
-        if (provider.id === 'claude') {
-            const option = Array.isArray(provider.loginOptions)
-                ? provider.loginOptions.find((/** @type {any} */ o) => o.tool === tool)
-                : null;
-            if (!option?.installed) {
-                await handleInstallAndAuth(provider, tool);
-                return;
-            }
-        } else if (!provider.installed) {
+        if (!provider.installed) {
             await handleInstallAndAuth(provider, tool);
             return;
         }
@@ -408,26 +373,6 @@
                         >
                             {busyLogoutTool === provider.logoutTool ? 'Logging out...' : 'Logout'}
                         </button>
-                    {:else if provider.id === 'claude'}
-                        <div class="action-group">
-                            {#each provider.loginOptions as option}
-                                <button
-                                    class="action-btn {option.installed ? '' : 'ghost'}"
-                                    on:click={() => handleLogin(provider, option.tool)}
-                                    disabled={!!busyLoginTool || !!busyLogoutTool || !!busyInstallTool}
-                                >
-                                    {#if busyInstallTool === option.tool}
-                                        Installing...
-                                    {:else if busyLoginTool === option.tool}
-                                        Logging in...
-                                    {:else if option.installed}
-                                        Login via {option.label}
-                                    {:else}
-                                        Install {option.label}
-                                    {/if}
-                                </button>
-                            {/each}
-                        </div>
                     {:else}
                         <button class="action-btn" on:click={() => handleLogin(provider)} disabled={!!busyLoginTool || !!busyLogoutTool || !!busyInstallTool}>
                             {#if busyInstallTool === provider.loginTool}
