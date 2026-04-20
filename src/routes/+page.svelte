@@ -545,7 +545,7 @@
         <div class="sidebar-top">
             <div class="sidebar-header">
                 <h1>FreeHive</h1>
-                <span class="version-tag">v0.1.0-beta</span>
+                <span class="version-tag">v0.1.0 Beta</span>
             </div>
 
             <button class="new-chat-btn" on:click={handleNewChat}>
