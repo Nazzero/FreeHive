@@ -545,6 +545,7 @@
         <div class="sidebar-top">
             <div class="sidebar-header">
                 <h1>FreeHive</h1>
+                <span class="version-tag">v0.1.0-beta</span>
             </div>
 
             <button class="new-chat-btn" on:click={handleNewChat}>
@@ -868,11 +869,23 @@
         flex: 1;
     }
 
+    .sidebar-header {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+    }
+
     .sidebar-header h1 {
         font-size: 16px;
         font-weight: 600;
         color: var(--text-primary);
         padding-left: 8px;
+    }
+
+    .version-tag {
+        font-size: 10px;
+        color: var(--text-muted);
+        font-weight: 400;
     }
 
     .new-chat-btn {
