@@ -4,7 +4,7 @@
 
     const dispatch = createEventDispatcher();
     const BASE_URL = API_BASE_URL;
-    const APP_VERSION = '0.6.0';
+    const APP_VERSION = '0.1.0-beta';
 
     /** When true, don't auto-dispatch 'ready' on mount (used when opened from Accounts). */
     export let skipAutoReady = false;
