@@ -1,7 +1,7 @@
 {
   "name": "com.freehive.arena_bridge",
   "description": "FreeHive Arena Bridge Host",
-  "path": "/home/nazmoney/Ilee_AI/native_host/host.py",
+  "path": "/home/nazmoney/FreeHive/native_host/host.py",
   "type": "stdio",
   "allowed_origins": [
     "chrome-extension://jkclihigpeefogblifghhpojgkbheked/"

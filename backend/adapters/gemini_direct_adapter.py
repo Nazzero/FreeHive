@@ -29,6 +29,8 @@ from pathlib import Path
 
 import httpx
 
+from backend.resilience.cli_introspection import get_gemini_config
+
 logger = logging.getLogger(__name__)
 
 # Credentials written by `gemini auth login`
@@ -37,19 +39,22 @@ TOKENS_FILE = Path.home() / ".gemini" / "oauth_creds.json"
 # Google OAuth2 refresh endpoint
 REFRESH_URL = "https://oauth2.googleapis.com/token"
 
-# Code Assist endpoint (discovered by proxying Gemini CLI traffic)
-CODE_ASSIST_BASE = "https://cloudcode-pa.googleapis.com/v1internal"
-GENERATE_URL = f"{CODE_ASSIST_BASE}:streamGenerateContent?alt=sse"
-LOAD_CODE_ASSIST_URL = f"{CODE_ASSIST_BASE}:loadCodeAssist"
-
-# Client credentials from Gemini CLI bundle (oauth2.ts / packages/core/src/code_assist/)
-_CLIENT_ID = "REDACTED_GOOGLE_CLIENT_ID"
-_CLIENT_SECRET = "REDACTED_GOOGLE_CLIENT_SECRET"
-
-# Match the CLI version we are impersonating
-_CLI_VERSION = "0.38.0"
-_PLATFORM = platform.system().lower()  # "linux", "darwin", "windows"
+_PLATFORM = platform.system().lower()
 _ARCH = "x64" if platform.machine() in ("x86_64", "AMD64") else platform.machine()
+
+
+def _get_gemini_cfg():
+    """Get dynamically extracted Gemini CLI config."""
+    return get_gemini_config()
+
+
+def _get_endpoints(cfg: dict) -> tuple[str, str]:
+    """Derive endpoint URLs from config base."""
+    base = cfg["endpoint_base"]
+    return (
+        f"{base}:streamGenerateContent?alt=sse",
+        f"{base}:loadCodeAssist",
+    )
 
 DEFAULT_MODEL = "gemini-3-flash-preview"
 _EXPIRY_BUFFER_MS = 5 * 60 * 1000
@@ -579,6 +584,7 @@ class GeminiDirectAdapter:
         self._session_id = _SHARED_SESSION_ID
         self._model = model or DEFAULT_MODEL
         self._paid_tier_available: bool = False
+        self._cfg = _get_gemini_cfg()
 
     # ------------------------------------------------------------------
     # Public interface
@@ -668,14 +674,15 @@ class GeminiDirectAdapter:
         return (time.time() * 1000 + _EXPIRY_BUFFER_MS) >= expiry_ms
 
     async def _refresh_token(self, refresh_token: str) -> str:
+        cfg = self._cfg
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
                 REFRESH_URL,
                 data={
                     "grant_type": "refresh_token",
                     "refresh_token": refresh_token,
-                    "client_id": _CLIENT_ID,
-                    "client_secret": _CLIENT_SECRET,
+                    "client_id": cfg["client_id"],
+                    "client_secret": cfg["client_secret"],
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
@@ -771,9 +778,10 @@ class GeminiDirectAdapter:
                 }
             }
 
+            _, load_url = _get_endpoints(self._cfg)
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.post(
-                    LOAD_CODE_ASSIST_URL,
+                    load_url,
                     headers=self._headers(token),
                     json=load_body,
                 )
@@ -802,7 +810,7 @@ class GeminiDirectAdapter:
             }
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp2 = await client.post(
-                    LOAD_CODE_ASSIST_URL,
+                    load_url,
                     headers=self._headers(token),
                     json=setup_body,
                 )
@@ -953,6 +961,11 @@ class GeminiDirectAdapter:
         self, token: str, payload: dict
     ) -> httpx.Response:
         """Send one request with a single auth-refresh retry on 401."""
+        generate_url, _ = _get_endpoints(self._cfg)
+
+        # Anti-fingerprint jitter
+        await asyncio.sleep(random.uniform(0.05, 0.2))
+
         for auth_attempt in range(2):
             if auth_attempt == 1:
                 tokens_data = self._read_tokens()
@@ -960,12 +973,11 @@ class GeminiDirectAdapter:
                 if refresh:
                     token = await self._refresh_token(refresh)
                 else:
-                    # Return a fake 401 so the caller can raise properly
                     return httpx.Response(status_code=401)
 
             async with httpx.AsyncClient(timeout=120.0) as client:
                 resp = await client.post(
-                    GENERATE_URL,
+                    generate_url,
                     headers=self._headers(token),
                     json=payload,
                 )
@@ -1020,11 +1032,11 @@ class GeminiDirectAdapter:
         """Build headers matching what Gemini CLI sends.
 
         The CLI does NOT send x-goog-api-client for Code Assist requests.
-        It sends a User-Agent in the format:
-            GeminiCLI/<version>/<model> (<os>; <arch>; terminal)
+        Version dynamically extracted from installed Gemini CLI.
         """
+        cfg = self._cfg
         return {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
-            "User-Agent": f"GeminiCLI/{_CLI_VERSION}/{self._model} ({_PLATFORM}; {_ARCH}; terminal)",
+            "User-Agent": f"GeminiCLI/{cfg['version']}/{self._model} ({_PLATFORM}; {_ARCH}; terminal)",
         }
