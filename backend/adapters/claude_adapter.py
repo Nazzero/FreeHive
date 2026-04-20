@@ -5,15 +5,15 @@ import shutil
 class ClaudeAdapter:
 
     def __init__(self):
-        self.cli_command = "openclaude"
-        self._verify_cli()
+        self.cli_command = self._find_cli()
 
-    def _verify_cli(self):
-        if not shutil.which(self.cli_command):
-            raise RuntimeError(
-                f"'{self.cli_command}' not found. "
-                "Make sure OpenClaude is installed and in your PATH."
-            )
+    def _find_cli(self) -> str:
+        """Find Claude Code CLI."""
+        if shutil.which("claude"):
+            return "claude"
+        raise RuntimeError(
+            "Claude CLI not found. Install with: npm install -g @anthropic-ai/claude-code"
+        )
 
     async def send_message(self, message: str) -> str:
         try:
@@ -32,12 +32,12 @@ class ClaudeAdapter:
 
             if process.returncode != 0:
                 error = stderr.decode().strip()
-                raise RuntimeError(f"OpenClaude error: {error}")
+                raise RuntimeError(f"Claude CLI error: {error}")
 
             return stdout.decode().strip()
 
         except asyncio.TimeoutError:
             process.kill()
-            raise RuntimeError("OpenClaude timed out after 120 seconds")
+            raise RuntimeError("Claude CLI timed out after 120 seconds")
         except Exception as e:
             raise RuntimeError(f"Claude adapter failed: {str(e)}")

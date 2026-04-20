@@ -212,7 +212,7 @@ export async function logoutTool(tool) {
 
 /**
  * Install a CLI tool via SSE stream (mirrors SetupScreen's install flow).
- * @param {string} tool  "openclaude" | "claude_code" | "gemini_cli" | "chatgpt_cli"
+ * @param {string} tool  "claude_code" | "gemini_cli" | "chatgpt_cli"
  * @param {(event: any) => void} [onEvent]
  * @returns {Promise<any>}
  */
