@@ -29,7 +29,14 @@ def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
 
 
 def init_db():
-    """Create tables if they don't exist. Safe to call on every startup."""
+    """Create tables if they don't exist. Safe to call on every startup.
+
+    ⚠️ NOTE: This is synchronous I/O (SQLite) called at app startup (main.py:35).
+    It runs CREATE TABLE IF NOT EXISTS + lightweight schema migrations. On first
+    run it creates the DB; on subsequent starts it's fast (schema already exists).
+    Do NOT convert to async — SQLite doesn't benefit and it would complicate the
+    startup sequence. The blocking time is <50ms on warm starts.
+    """
     with _get_conn() as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS sessions (

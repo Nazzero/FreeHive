@@ -777,46 +777,12 @@
     return null;
   }
 
-  function injectRecaptchaScripts(sitekey) {
-    const key = String(sitekey || "").trim();
-    if (!key) {
-      return;
-    }
-    const head = document.head || document.documentElement;
-    if (!head) {
-      return;
-    }
-    const sources = [
-      `https://www.google.com/recaptcha/api.js?render=${encodeURIComponent(key)}`,
-      `https://www.google.com/recaptcha/enterprise.js?render=${encodeURIComponent(key)}`
-    ];
-    for (const src of sources) {
-      const exists = Array.from(document.scripts || []).some((script) => {
-        const current = String(script.src || "");
-        return current.includes("recaptcha") && current.includes(`render=${encodeURIComponent(key)}`);
-      });
-      if (exists) {
-        continue;
-      }
-      const node = document.createElement("script");
-      node.src = src;
-      node.async = true;
-      node.defer = true;
-      head.appendChild(node);
-    }
-  }
-
   async function waitForRecaptchaClient(sitekey, timeoutMs = 20000, pollMs = 250) {
     const start = Date.now();
-    let injected = false;
     while (Date.now() - start < timeoutMs) {
       const client = pickRecaptchaClient();
       if (client) {
         return client;
-      }
-      if (!injected && sitekey) {
-        injectRecaptchaScripts(sitekey);
-        injected = true;
       }
       await new Promise((resolve) => setTimeout(resolve, pollMs));
     }
@@ -1589,8 +1555,6 @@
   }
 
   async function warmUpRecaptcha() {
-    const sitekey = detectRecaptchaSiteKey();
-    if (sitekey) injectRecaptchaScripts(sitekey);
     await refreshToken();
     _warmupDone = true;
     scheduleNextRefresh();

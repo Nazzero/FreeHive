@@ -1,6 +1,6 @@
 <script>
     import { tick, onMount } from 'svelte';
-    import { messages, isLoading, selectedModel, selectedProvider, selectedModelDisplay, availableModels, groupedModels, addMessage, renderAssistantHtml, thinkingEffort, modelSupportsThinking } from '$lib/store.js';
+    import { messages, isLoading, selectedModel, selectedProvider, selectedModelDisplay, availableModels, groupedModels, addMessage, addMessageStreaming, renderAssistantHtml, thinkingEffort, modelSupportsThinking } from '$lib/store.js';
     import {
         sendChat,
         getSetupStatus,
@@ -304,6 +304,9 @@
         activeView = 'chat';
     }
 
+    /** @type {AbortController | null} */
+    let currentAbort = null;
+
     async function handleSubmit() {
         if (!input.trim() || $isLoading) return;
 
@@ -312,32 +315,58 @@
 
         addMessage('user', userMessage);
         $isLoading = true;
+        userScrolledAway = false;
+
+        const abort = new AbortController();
+        currentAbort = abort;
 
         await tick();
         scrollToBottom();
 
         try {
-            const result = await sendChat($selectedModel, userMessage, activeChatSessionId);
+            const result = await sendChat($selectedModel, userMessage, activeChatSessionId, abort.signal);
+            if (abort.signal.aborted) return;
             if (result?.session_id) {
                 activeChatSessionId = result.session_id;
                 setActiveSession(result.session_id, $selectedModel);
             }
             const response = typeof result === 'string' ? result : (result?.response ?? '');
             const transport = formatTransportLabel(result?.transport?.path);
-            addMessage('assistant', response, $selectedModel, transport);
+            $isLoading = false;
+            addMessageStreaming(response, $selectedModel, transport, async () => {
+                await tick();
+                scrollToBottom();
+            });
             await refreshSavedSessions();
         } catch (err) {
+            if (abort.signal.aborted) return;
             const msg = String(/** @type {any} */ (err)?.message || 'Unknown error');
             addMessage('assistant', `Error: ${msg}`, $selectedModel);
         } finally {
+            currentAbort = null;
             $isLoading = false;
             await tick();
             scrollToBottom();
         }
     }
 
+    function handleCancel() {
+        if (currentAbort) {
+            currentAbort.abort();
+            currentAbort = null;
+        }
+        $isLoading = false;
+    }
+
     function scrollToBottom() {
         if (chatContainer) {
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+    }
+
+    // Auto-scroll during streaming unless user scrolled away
+    $: if ($messages.length > 0 && $messages[$messages.length - 1]?.streaming) {
+        if (!userScrolledAway && chatContainer) {
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
     }
@@ -353,9 +382,20 @@
     }
 
     let animatingScroll = false;
+    let userScrolledAway = false;
+
+    function isNearBottom() {
+        if (!chatContainer) return true;
+        const dist = chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight;
+        return dist < 100;
+    }
 
     function handleChatScroll() {
         checkScrollPosition();
+        // Track if user manually scrolled away from bottom during streaming
+        if (!animatingScroll) {
+            userScrolledAway = !isNearBottom();
+        }
         // If user scrolls during animation (e.g. mousewheel), cancel it
         if (scrollAnimId && !animatingScroll) {
             cancelAnimationFrame(scrollAnimId);
@@ -751,11 +791,11 @@
                     <div class="message-row {msg.role}">
                         <div class="message-content-wrapper">
                             <div class="role-indicator">{msg.role === 'user' ? 'You' : 'FreeHive'}</div>
-                            <div class="bubble">
+                            <div class="bubble" class:streaming={msg.streaming}>
                                 {#if msg.contentHtml}
-                                    {@html msg.contentHtml}
+                                    {@html msg.contentHtml}{#if msg.streaming}<span class="streaming-cursor"></span>{/if}
                                 {:else}
-                                    {msg.content}
+                                    {msg.content}{#if msg.streaming}<span class="streaming-cursor"></span>{/if}
                                 {/if}
                             </div>
                             <button class="copy-msg-btn" on:click={() => copyMessage(msg.id, msg.content)} title="Copy message">
@@ -796,14 +836,24 @@
                         rows="1"
                         disabled={$isLoading}
                     ></textarea>
-                    <button
-                        class="send-btn"
-                        aria-label="Send message"
-                        on:click={handleSubmit}
-                        disabled={$isLoading || !input.trim()}
-                    >
-                        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-                    </button>
+                    {#if $isLoading}
+                        <button
+                            class="send-btn cancel-btn"
+                            aria-label="Cancel"
+                            on:click={handleCancel}
+                        >
+                            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>
+                        </button>
+                    {:else}
+                        <button
+                            class="send-btn"
+                            aria-label="Send message"
+                            on:click={handleSubmit}
+                            disabled={!input.trim()}
+                        >
+                            <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                        </button>
+                    {/if}
                 </div>
                 <div class="footer-note">FreeHive can make mistakes. Check important info.</div>
             </div>
@@ -1573,22 +1623,51 @@
 
     .bubble.loading {
         display: flex;
-        gap: 6px;
+        gap: 7px;
         align-items: center;
         justify-content: center;
+        padding: 14px 22px;
+        min-width: 70px;
     }
     .bubble.loading span {
-        width: 6px;
-        height: 6px;
-        background: var(--text-muted);
+        width: 8px;
+        height: 8px;
+        background: var(--accent-color, #6c8aff);
         border-radius: 50%;
-        animation: pulse 1.2s infinite;
+        opacity: 0.4;
+        animation: dotBounce 1.4s ease-in-out infinite;
     }
     .bubble.loading span:nth-child(2) { animation-delay: 0.2s; }
     .bubble.loading span:nth-child(3) { animation-delay: 0.4s; }
-    @keyframes pulse {
-        0%, 100% { opacity: 0.3; transform: scale(0.8); }
-        50% { opacity: 1; transform: scale(1); }
+    @keyframes dotBounce {
+        0%, 60%, 100% {
+            transform: translateY(0);
+            opacity: 0.4;
+        }
+        30% {
+            transform: translateY(-6px);
+            opacity: 1;
+            box-shadow: 0 2px 8px var(--accent-color, rgba(108, 138, 255, 0.4));
+        }
+    }
+
+    /* Streaming cursor */
+    .bubble.streaming :global(*) {
+        animation: none;
+    }
+    .streaming-cursor {
+        display: inline-block;
+        width: 2px;
+        height: 1.1em;
+        background: var(--accent-color, #6c8aff);
+        margin-left: 2px;
+        vertical-align: text-bottom;
+        border-radius: 1px;
+        animation: cursorBlink 1s ease-in-out infinite;
+    }
+    @keyframes cursorBlink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.3; }
     }
 
     /* Input Area */
@@ -1681,6 +1760,8 @@
     }
     .send-btn:hover:not(:disabled) { opacity: 0.8; }
     .send-btn:disabled { background: var(--border-medium); color: var(--text-muted); cursor: not-allowed; }
+    .send-btn.cancel-btn { background: #ef4444; color: #fff; }
+    .send-btn.cancel-btn:hover { opacity: 0.85; }
 
     .footer-note {
         font-size: 11px;

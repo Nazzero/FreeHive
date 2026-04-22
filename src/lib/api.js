@@ -111,10 +111,10 @@ export async function createChatSession(model) {
  * @param {string | null} [sessionId]
  * @returns {Promise<any>}
  */
-export async function sendChat(model, message, sessionId = null) {
+export async function sendChat(model, message, sessionId = null, signal = undefined) {
     const normalizedModel = normalizeModelId(model);
     const session_id = await getOrCreateSession(normalizedModel, sessionId);
-    const res = await axios.post(`${BASE_URL}/chat`, { model: normalizedModel, message, session_id });
+    const res = await axios.post(`${BASE_URL}/chat`, { model: normalizedModel, message, session_id }, { signal });
     if (res.data && typeof res.data === 'object') {
         return { ...res.data, session_id };
     }
@@ -153,14 +153,6 @@ export async function deleteChatSession(sessionId) {
     if (activeSession?.id === sessionId) {
         activeSession = null;
     }
-}
-
-/**
- * @returns {Promise<any[]>}
- */
-export async function getModels() {
-    const res = await axios.get(`${BASE_URL}/models`);
-    return res.data.models;
 }
 
 /**
@@ -530,5 +522,23 @@ export async function getArenaChromeStatus() {
  */
 export async function launchArenaChrome() {
     const res = await axios.post(`${BASE_URL}/arena/launch-chrome`);
+    return res.data;
+}
+
+/**
+ * Get the resolved path to the bundled Arena Chrome extension folder.
+ * @returns {Promise<{path: string, exists: boolean}>}
+ */
+export async function getArenaExtensionPath() {
+    const res = await axios.get(`${BASE_URL}/arena/extension-path`);
+    return res.data;
+}
+
+/**
+ * Open the Arena extension folder in the OS file manager.
+ * @returns {Promise<{success: boolean, path?: string, error?: string}>}
+ */
+export async function openArenaExtensionFolder() {
+    const res = await axios.post(`${BASE_URL}/arena/open-extension-folder`);
     return res.data;
 }

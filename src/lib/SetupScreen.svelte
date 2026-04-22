@@ -69,12 +69,17 @@
     /** @type {string | null} */
     let expandedTool = null;
 
+    // ⚠️ STARTUP PATH — This polling loop determines initial load time.
+    // Uses exponential backoff (500ms → 5s cap). Do NOT increase maxAttempts
+    // without considering user-perceived wait time. Backend CLI checks are
+    // cached (5-min TTL) so subsequent polls are fast once backend responds.
     async function fetchStatus() {
         loading = true;
         backendError = '';
         backendAttempt = 0;
-        const maxAttempts = 30;
-        const delayMs = 1000;
+        const maxAttempts = 15;
+        const baseDelay = 500;
+        const maxDelay = 5000;
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             backendAttempt = attempt;
             try {
@@ -88,7 +93,8 @@
                 return;
             } catch {
                 if (attempt < maxAttempts) {
-                    await new Promise((r) => setTimeout(r, delayMs));
+                    const delay = Math.min(baseDelay * Math.pow(1.5, attempt - 1), maxDelay);
+                    await new Promise((r) => setTimeout(r, delay));
                 }
             }
         }

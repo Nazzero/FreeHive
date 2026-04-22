@@ -45,14 +45,12 @@ HAS_PTY_SUPPORT = (not IS_WINDOWS) and (pty is not None) and (fcntl is not None)
 _SHELL = ["cmd", "/c"] if IS_WINDOWS else ["bash", "-l", "-c"]
 
 INSTALL_COMMANDS = {
-    "openclaude": "npm install -g @gitlawb/openclaude",
     "claude_code": "npm install -g @anthropic-ai/claude-code",
     "gemini_cli": "npm install -g @google/gemini-cli",
     "chatgpt_cli": "npm install -g @openai/codex",
 }
 
 CLI_BINARIES = {
-    "openclaude": "openclaude",
     "claude_code": "claude",
     "gemini_cli": "gemini",
     "chatgpt_cli": "codex",
@@ -111,6 +109,31 @@ def _get_binary_path(name: str) -> str | None:
 
 def _is_installed(name: str) -> bool:
     return _get_binary_path(name) is not None
+
+
+# ── CLI detection cache ────────────────────────────────────────────────────
+# ⚠️ PERFORMANCE-CRITICAL — /setup/status is called on every app startup.
+# Without caching, 6+ subprocess calls (each up to 10s timeout) execute on
+# EVERY status poll. The cache avoids repeated shelling out for the same binary.
+# Invalidate after installs so newly-installed CLIs are detected immediately.
+_cli_cache: dict[str, tuple[bool, float]] = {}
+_CLI_CACHE_TTL = 300  # 5 minutes
+
+def _is_installed_cached(name: str) -> bool:
+    """Cached wrapper around _is_installed. Returns cached result within TTL."""
+    now = time.monotonic()
+    if name in _cli_cache:
+        val, ts = _cli_cache[name]
+        if now - ts < _CLI_CACHE_TTL:
+            return val
+    result = _is_installed(name)
+    _cli_cache[name] = (result, now)
+    return result
+
+
+def invalidate_cli_cache():
+    """Clear CLI detection cache. Call after install/uninstall operations."""
+    _cli_cache.clear()
 
 
 def _decode_jwt_payload(token: str) -> dict:
@@ -345,15 +368,18 @@ async def get_usage(request: Request):
 # Endpoints
 # ---------------------------------------------------------------------------
 
+# ⚠️ PERFORMANCE-CRITICAL — Called on every app startup by frontend polling.
+# CLI detection uses _is_installed_cached() with 5-min TTL to avoid repeated
+# subprocess calls. Cache is invalidated after /setup/install completes.
+# If adding new checks here, use _is_installed_cached() not _is_installed().
 @setup_router.get("/setup/status")
 async def get_setup_status():
-    node_ok = _is_installed("node")
-    npm_ok = _is_installed("npm")
-    rg_ok = _is_installed("rg")
-    openclaude_ok = _is_installed("openclaude")
-    claude_ok = _is_installed("claude")
-    gemini_ok = _is_installed("gemini")
-    codex_ok = _is_installed("codex")
+    node_ok = _is_installed_cached("node")
+    npm_ok = _is_installed_cached("npm")
+    rg_ok = _is_installed_cached("rg")
+    claude_ok = _is_installed_cached("claude")
+    gemini_ok = _is_installed_cached("gemini")
+    codex_ok = _is_installed_cached("codex")
     auth = _read_auth_status()
     gemini_auth = _read_gemini_auth_status()
 
@@ -396,14 +422,6 @@ async def get_setup_status():
             "node": node_ok,
             "npm": npm_ok,
             "ripgrep": rg_ok,
-        },
-        "openclaude": {
-            "installed": openclaude_ok,
-            "authenticated": authed,
-            "tier": auth["tier"],
-            "account_email": auth["account_email"],
-            "account_name": auth["account_name"],
-            "account_label": auth["account_label"],
         },
         "claude_code": {
             "installed": claude_ok,
@@ -527,6 +545,7 @@ async def install_tool(request: InstallRequest):
         await process.wait()
 
         if process.returncode == 0:
+            invalidate_cli_cache()
             installed = _is_installed(binary_name)
             yield _sse({"status": "done", "success": installed})
             if not installed:
@@ -717,7 +736,8 @@ async def install_node():
                                 "msg": "Node.js installation via nvm failed."})
                     return
 
-            # Verify
+            # Verify — invalidate cache so fresh check runs
+            invalidate_cli_cache()
             node_ok = _is_installed("node")
             npm_ok = _is_installed("npm")
             if node_ok and npm_ok:

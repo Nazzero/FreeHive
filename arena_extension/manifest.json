@@ -12,8 +12,7 @@
   "permissions": [
     "nativeMessaging",
     "tabs",
-    "scripting",
-    "storage"
+    "scripting"
   ],
   "host_permissions": [
     "https://arena.ai/*"

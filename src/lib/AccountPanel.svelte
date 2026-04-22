@@ -141,6 +141,17 @@
     }
 
     /**
+     * @param {string} id
+     * @returns {string}
+     */
+    function providerIcon(id) {
+        if (id === 'claude') return '/logos/claude.png';
+        if (id === 'chatgpt') return '/logos/chatgpt.png';
+        if (id === 'gemini') return '/logos/gemini.png';
+        return '';
+    }
+
+    /**
      * @param {any} value
      * @returns {any}
      */
@@ -318,10 +329,14 @@
 
 <div class="panel">
     <div class="panel-header">
-        <button class="back-btn" on:click={() => dispatch('close')}>← Back</button>
+        <button class="back-btn" on:click={() => dispatch('close')}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+            Back
+        </button>
         <h2>Accounts</h2>
-        <button class="refresh-btn" on:click={() => fetchStatus()} disabled={loading}>
-            {loading ? 'Refreshing...' : 'Refresh'}
+        <button class="refresh-btn" on:click={() => fetchStatus()} disabled={loading} class:spinning={loading}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+            {loading ? '' : 'Refresh'}
         </button>
     </div>
 
@@ -350,11 +365,16 @@
     {/if}
 
     {#if loading}
-        <p class="empty">Loading account status...</p>
+        <div class="loading-state">
+            <span></span><span></span><span></span>
+        </div>
     {:else}
         <div class="provider-list">
             {#each providers as provider}
                 <div class="provider-card {provider.authenticated ? 'connected' : ''}">
+                    <div class="provider-icon">
+                        <img src={providerIcon(provider.id)} alt="{provider.name} logo" class:chatgpt-logo={provider.id === 'chatgpt'} />
+                    </div>
                     <div class="provider-main">
                         <div class="provider-title">
                             <h3>{provider.name}</h3>
@@ -422,37 +442,73 @@
     }
 
     h2 {
-        font-size: 16px;
+        font-size: 17px;
         font-weight: 600;
         color: var(--text-primary);
     }
 
     .back-btn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
         background: transparent;
         border: none;
         color: var(--text-secondary);
         font-size: 13px;
         cursor: pointer;
-        padding: 4px 8px;
-        border-radius: 4px;
+        padding: 6px 10px;
+        border-radius: 6px;
+        transition: all 0.15s;
     }
-    .back-btn:hover { color: var(--text-primary); background: var(--bg-secondary); }
+    .back-btn:hover { color: var(--text-primary); background: var(--bg-tertiary); }
 
     .refresh-btn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
         background: var(--bg-secondary);
         border: 1px solid var(--border-medium);
         color: var(--text-primary);
         padding: 6px 12px;
-        border-radius: 6px;
+        border-radius: 8px;
         font-size: 13px;
         cursor: pointer;
+        transition: all 0.15s;
+    }
+    .refresh-btn:hover { background: var(--bg-tertiary); }
+    .refresh-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .refresh-btn.spinning svg {
+        animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
     }
 
-    .refresh-btn:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
+    /* Loading state */
+    .loading-state {
+        display: flex;
+        gap: 7px;
+        align-items: center;
+        justify-content: center;
+        padding: 32px 0;
+    }
+    .loading-state span {
+        width: 8px;
+        height: 8px;
+        background: var(--accent-color);
+        border-radius: 50%;
+        opacity: 0.4;
+        animation: dotBounce 1.4s ease-in-out infinite;
+    }
+    .loading-state span:nth-child(2) { animation-delay: 0.2s; }
+    .loading-state span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes dotBounce {
+        0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+        30% { transform: translateY(-6px); opacity: 1; }
     }
 
+    /* Provider cards */
     .provider-list {
         display: flex;
         flex-direction: column;
@@ -462,23 +518,49 @@
     .provider-card {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 14px 16px;
+        gap: 14px;
+        padding: 16px 18px;
         background: var(--bg-secondary);
         border: 1px solid var(--border-medium);
-        border-radius: 10px;
+        border-radius: 12px;
+        transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .provider-card:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
     }
 
     .provider-card.connected {
-        border-color: var(--border-medium);
+        border-left: 3px solid var(--accent-color);
+    }
+
+    .provider-icon {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 36px;
+        height: 36px;
+        border-radius: 8px;
+        background: var(--bg-tertiary);
+        flex-shrink: 0;
+        overflow: hidden;
+    }
+    .provider-icon img {
+        width: 22px;
+        height: 22px;
+        object-fit: contain;
+    }
+    .provider-icon img.chatgpt-logo {
+        width: 36px;
+        height: 36px;
     }
 
     .provider-main {
         display: flex;
         flex-direction: column;
-        gap: 6px;
+        gap: 4px;
         min-width: 0;
+        flex: 1;
     }
 
     .provider-title {
@@ -488,7 +570,7 @@
     }
 
     h3 {
-        font-size: 15px;
+        font-size: 14px;
         font-weight: 600;
         color: var(--text-primary);
         margin: 0;
@@ -496,49 +578,55 @@
 
     .provider-detail {
         font-size: 12px;
-        color: var(--text-secondary);
+        color: var(--text-muted);
         margin: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
 
     .badge {
         font-size: 11px;
-        padding: 3px 8px;
+        padding: 3px 9px;
         border-radius: 999px;
-        border: 1px solid var(--border-medium);
-        background: var(--bg-tertiary);
         white-space: nowrap;
+        font-weight: 500;
     }
 
     .badge.active {
         color: var(--accent-color);
+        background: var(--accent-muted);
+        border: 1px solid var(--accent-color);
     }
 
     .badge.inactive {
         color: var(--text-muted);
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border-medium);
     }
 
+    /* Action buttons */
     .action-btn {
-        background: var(--text-primary);
+        background: var(--accent-color);
         border: none;
         color: var(--bg-primary);
-        padding: 8px 12px;
-        border-radius: 6px;
+        padding: 8px 14px;
+        border-radius: 8px;
         font-size: 12px;
-        font-weight: 500;
+        font-weight: 600;
         cursor: pointer;
         white-space: nowrap;
+        transition: opacity 0.15s, transform 0.15s;
     }
-
-    .action-btn:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-    }
+    .action-btn:hover:not(:disabled) { opacity: 0.85; transform: scale(1.02); }
+    .action-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
     .action-btn.danger {
         background: var(--bg-tertiary);
         color: #ef4444;
         border: 1px solid var(--border-medium);
     }
+    .action-btn.danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.1); border-color: #ef4444; }
 
     .action-btn.ghost {
         background: var(--bg-secondary);
@@ -554,24 +642,32 @@
         flex-wrap: wrap;
     }
 
+    /* Alerts */
     .alert {
-        padding: 10px 12px;
+        padding: 10px 14px;
         border-radius: 8px;
         font-size: 13px;
         border: 1px solid var(--border-medium);
         background: var(--bg-secondary);
+        border-left: 3px solid var(--border-medium);
     }
 
     .alert.error {
         color: #ef4444;
+        border-left-color: #ef4444;
+        background: rgba(239, 68, 68, 0.05);
     }
 
     .alert.success {
         color: var(--accent-color);
+        border-left-color: var(--accent-color);
+        background: var(--accent-muted);
     }
 
     .alert.info {
         color: var(--text-secondary);
+        border-left-color: #3b82f6;
+        background: rgba(59, 130, 246, 0.05);
     }
 
     .elapsed {
@@ -589,5 +685,6 @@
     .hint {
         font-size: 12px;
         color: var(--text-muted);
+        margin-top: 4px;
     }
 </style>
