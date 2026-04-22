@@ -294,6 +294,34 @@ def launch_chrome_with_extension(url: str = "https://arena.ai/text/direct") -> d
         return {"success": False, "error": f"Failed to launch Chrome: {exc}"}
 
 
+def get_extension_path() -> dict:
+    """Return the resolved path to the bundled Arena Chrome extension folder."""
+    ext_dir = EXTENSION_DIR.resolve()
+    exists = ext_dir.exists() and (ext_dir / "manifest.json").exists()
+    return {
+        "path": str(ext_dir),
+        "exists": exists,
+    }
+
+
+def open_extension_folder() -> dict:
+    """Open the Arena extension folder in the OS file manager."""
+    ext_dir = EXTENSION_DIR.resolve()
+    if not ext_dir.exists():
+        return {"success": False, "error": f"Extension folder not found: {ext_dir}"}
+    try:
+        system = platform.system()
+        if system == "Windows":
+            os.startfile(str(ext_dir))
+        elif system == "Darwin":
+            subprocess.Popen(["open", str(ext_dir)])
+        else:
+            subprocess.Popen(["xdg-open", str(ext_dir)])
+        return {"success": True, "path": str(ext_dir)}
+    except Exception as exc:
+        return {"success": False, "error": str(exc), "path": str(ext_dir)}
+
+
 def get_chrome_status() -> dict:
     """Return current state of Chrome + extension setup."""
     chrome_binary = _find_chrome_binary()
@@ -302,5 +330,6 @@ def get_chrome_status() -> dict:
         "chrome_path": chrome_binary,
         "chrome_running": _is_chrome_running() if chrome_binary else False,
         "extension_dir_exists": EXTENSION_DIR.exists(),
+        "extension_path": str(EXTENSION_DIR.resolve()),
         "native_host_installed": _is_native_host_installed(),
     }

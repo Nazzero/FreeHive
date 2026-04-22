@@ -1,6 +1,6 @@
 <script>
     import { createEventDispatcher, onMount } from 'svelte';
-    import { getArenaStatus, getArenaModels, getArenaHealth, probeArenaModels, startArena, logoutArena, showArenaBrowser, setupArena, getArenaChromeStatus, refreshArenaModels } from '$lib/api.js';
+    import { getArenaStatus, getArenaModels, getArenaHealth, probeArenaModels, startArena, logoutArena, showArenaBrowser, setupArena, getArenaChromeStatus, refreshArenaModels, getArenaExtensionPath, openArenaExtensionFolder } from '$lib/api.js';
     import { availableModels, selectedModel } from '$lib/store.js';
 
     const dispatch = createEventDispatcher();
@@ -25,6 +25,9 @@
     let showBrowserMessage = '';
     let setupLoading = false;
     let setupMessage = '';
+    let extensionPath = '';
+    let extensionExists = false;
+    let openFolderLoading = false;
 
     // Probe state
     let probing = false;
@@ -48,6 +51,11 @@
     };
 
     onMount(async () => {
+        // Fetch extension path in parallel with status
+        getArenaExtensionPath().then((data) => {
+            extensionPath = data?.path || '';
+            extensionExists = data?.exists || false;
+        }).catch(() => {});
         await fetchStatus();
         if (status?.bridge_active || status?.browser_available || status?.steel_available) {
             await loadStoredHealth();
@@ -255,6 +263,14 @@
         } finally {
             setupLoading = false;
         }
+    }
+
+    async function handleOpenExtensionFolder() {
+        openFolderLoading = true;
+        try {
+            await openArenaExtensionFolder();
+        } catch { /* non-fatal */ }
+        finally { openFolderLoading = false; }
     }
 
     async function handleLogin() {
@@ -623,10 +639,24 @@
                 <div class="step-number">2</div>
                 <div class="step-body">
                     <h3>Install Extension</h3>
-                    <p><strong>Option A — Chrome Web Store</strong> (recommended):<br/>
-                    <a href="https://chromewebstore.google.com/detail/freehive-arena-bridge/jkclihigpeefogblifghhpojgkbheked" target="_blank" rel="noopener" class="store-link">Install from Chrome Web Store</a></p>
-                    <p><strong>Option B — Load Unpacked</strong> (developer mode):<br/>
-                    Open <code class="inline-code">chrome://extensions</code> &rarr; Enable <em>Developer mode</em> &rarr; <em>Load unpacked</em> &rarr; select the <code class="inline-code">arena_extension</code> folder</p>
+                    <p>The extension is already bundled with FreeHive. Follow these steps to load it in Chrome:</p>
+                    <ol class="install-steps">
+                        <li>Open Chrome and go to <code class="inline-code">chrome://extensions</code></li>
+                        <li>Enable <strong>Developer mode</strong> (toggle in top-right corner)</li>
+                        <li>Click <strong>Load unpacked</strong></li>
+                        <li>Select the extension folder below</li>
+                    </ol>
+                    {#if extensionPath}
+                        <div class="ext-path-box">
+                            <code class="ext-path">{extensionPath}</code>
+                            <button class="ext-open-btn" on:click={handleOpenExtensionFolder} disabled={openFolderLoading}>
+                                {openFolderLoading ? 'Opening...' : 'Open Folder'}
+                            </button>
+                        </div>
+                    {/if}
+                    {#if !extensionExists && extensionPath}
+                        <p class="hint" style="color: #f59e0b;">Extension folder not found — run Setup above first.</p>
+                    {/if}
                 </div>
             </div>
             <div class="setup-step muted">
@@ -1014,6 +1044,32 @@
     .code-block { display: flex; align-items: flex-start; gap: 8px; background: var(--bg-primary); border: 1px solid var(--border-medium); border-radius: 6px; padding: 10px 12px; }
     .code-block code { flex: 1; font-family: ui-monospace, Menlo, Monaco, monospace; font-size: 11.5px; color: var(--text-primary); word-break: break-all; white-space: pre-wrap; }
     .inline-code { font-family: ui-monospace, Menlo, Monaco, monospace; font-size: 12px; background: var(--bg-tertiary); padding: 1px 5px; border-radius: 3px; }
+    .install-steps {
+        padding-left: 20px; margin: 6px 0; display: flex; flex-direction: column; gap: 4px;
+        font-size: 13px; color: var(--text-secondary);
+    }
+    .install-steps li { line-height: 1.5; }
+    .install-steps li strong { color: var(--text-primary); }
+    .ext-path-box {
+        display: flex; align-items: center; gap: 8px;
+        background: var(--bg-primary); border: 1px solid var(--border-medium);
+        border-radius: 6px; padding: 8px 12px; margin-top: 4px;
+    }
+    .ext-path {
+        flex: 1; font-family: ui-monospace, Menlo, Monaco, monospace;
+        font-size: 11.5px; color: var(--text-primary);
+        word-break: break-all; white-space: pre-wrap;
+        user-select: all;
+    }
+    .ext-open-btn {
+        flex-shrink: 0; background: var(--text-primary); color: var(--bg-primary);
+        border: none; padding: 5px 12px; border-radius: 4px;
+        font-size: 12px; font-weight: 500; cursor: pointer;
+        transition: opacity 0.15s;
+    }
+    .ext-open-btn:hover:not(:disabled) { opacity: 0.85; }
+    .ext-open-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
     .store-link { display: inline-block; padding: 4px 12px; background: var(--accent, #4285f4); color: #fff; border-radius: 4px; text-decoration: none; font-size: 13px; font-weight: 500; margin-top: 4px; }
     .store-link:hover { opacity: 0.9; }
 

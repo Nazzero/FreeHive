@@ -437,6 +437,15 @@ class ArenaBridgeAdapter:
                         f"Arena model '{model}' is private/battle-only and cannot be used in Direct mode. "
                         "Refresh models and choose another model."
                     )
+                elif status == 403 and "recaptcha validation failed" in err_msg_l:
+                    # ⚠️ reCAPTCHA block — user must interact with arena.ai directly
+                    # to reset the captcha challenge. Retrying programmatically won't help.
+                    self._conversation_ids[session_id] = None
+                    err_msg = (
+                        "Arena reCAPTCHA verification failed. To fix this, open arena.ai "
+                        "in your browser and send any message to reset the captcha, "
+                        "or switch to a different account."
+                    )
                 logger.error(f"[ArenaBridge] Job error: {err_msg} (code: {err_code})")
                 raise RuntimeError(f"{err_msg}")
 
@@ -476,7 +485,7 @@ class ArenaBridgeAdapter:
         if "prompt failed" in message_l:
             return True
         if "recaptcha validation failed" in message_l:
-            return True
+            return False  # Don't retry — requires user interaction to solve
         return bool(error_info.get("retryable"))
 
     def _retry_delay_seconds(self, error_info: Dict[str, Any], attempt: int) -> float:

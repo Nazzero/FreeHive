@@ -845,6 +845,22 @@ async def arena_launch_chrome(request: Request):
     return launch_chrome_with_extension("https://arena.ai/text/direct")
 
 
+@router.get("/arena/extension-path")
+async def arena_extension_path(request: Request):
+    """Return the resolved path to the bundled Arena Chrome extension."""
+    _require_arena_enabled()
+    from backend.services.chrome_launcher import get_extension_path
+    return get_extension_path()
+
+
+@router.post("/arena/open-extension-folder")
+async def arena_open_extension_folder(request: Request):
+    """Open the Arena extension folder in the OS file manager."""
+    _require_arena_enabled()
+    from backend.services.chrome_launcher import open_extension_folder
+    return open_extension_folder()
+
+
 @router.get("/arena/all-models")
 async def arena_all_models(request: Request):
     """Fetch models from both text/direct and code/direct by navigating the tab."""
@@ -1055,3 +1071,57 @@ async def set_api_keys(body: ApiKeysRequest):
         "openai": bool(existing.get("openai", "")),
         "google": bool(existing.get("google", "")),
     }
+
+
+# ---------------------------------------------------------------------------
+# Backend log streaming (for in-app debugger)
+# ---------------------------------------------------------------------------
+
+@router.get("/backend/logs")
+async def stream_backend_logs(request: Request, lines: int = 200):
+    """SSE endpoint that tails ~/.freehive/backend.log.
+
+    Sends the last `lines` lines as backfill, then streams new lines every 1s.
+    The frontend Settings → Backend Logs tab subscribes to this.
+    """
+    from backend.main import LOG_FILE
+
+    async def _tail():
+        # Backfill: read last N lines from file
+        try:
+            with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+                all_lines = f.readlines()
+                tail = all_lines[-lines:] if len(all_lines) > lines else all_lines
+                for line in tail:
+                    stripped = line.rstrip("\n")
+                    if stripped:
+                        yield f"data: {json.dumps({'line': stripped})}\n\n"
+                file_pos = f.tell()
+        except FileNotFoundError:
+            yield f"data: {json.dumps({'line': '[No log file yet — waiting for output...]'})}\n\n"
+            file_pos = 0
+
+        # Stream new lines as they appear
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+                    # Handle log rotation: if file shrank, reset to start
+                    f.seek(0, 2)  # seek to end
+                    current_size = f.tell()
+                    if current_size < file_pos:
+                        file_pos = 0
+                    f.seek(file_pos)
+                    new_lines = f.readlines()
+                    if new_lines:
+                        for line in new_lines:
+                            stripped = line.rstrip("\n")
+                            if stripped:
+                                yield f"data: {json.dumps({'line': stripped})}\n\n"
+                    file_pos = f.tell()
+            except FileNotFoundError:
+                pass
+            await asyncio.sleep(1)
+
+    return StreamingResponse(_tail(), media_type="text/event-stream")

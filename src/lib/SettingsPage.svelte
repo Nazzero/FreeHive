@@ -1,5 +1,5 @@
 <script>
-    import { createEventDispatcher } from 'svelte';
+    import { createEventDispatcher, onDestroy } from 'svelte';
     import { availableModels } from '$lib/store.js';
     import { API_ROOT_URL, API_BASE_URL } from '$lib/config.js';
     import { resetDatabase, getUsageStats, getArenaModels } from '$lib/api.js';
@@ -16,6 +16,17 @@
     let usageError = null;
     /** @type {Array<any>} */
     let arenaUsageSessions = [];
+
+    // ── Backend Logs state ────────────────────────────────────────────────
+    /** @type {string[]} */
+    let logLines = [];
+    let logConnected = false;
+    let autoScroll = true;
+    /** @type {AbortController|null} */
+    let logAbort = null;
+    /** @type {HTMLPreElement|null} */
+    let logContainer = null;
+    const MAX_LOG_LINES = 1000;
 
     async function loadUsage() {
         usageLoading = true;
@@ -39,6 +50,70 @@
     }
 
     $: if (settingsTab === 'usage') loadUsage();
+
+    // Connect/disconnect log stream when tab changes
+    $: if (settingsTab === 'logs') {
+        connectLogStream();
+    } else {
+        disconnectLogStream();
+    }
+
+    async function connectLogStream() {
+        disconnectLogStream();
+        logAbort = new AbortController();
+        logConnected = false;
+        try {
+            const res = await fetch(`${API_BASE_URL}/backend/logs?lines=200`, {
+                signal: logAbort.signal,
+            });
+            if (!res.ok || !res.body) return;
+            logConnected = true;
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buf = '';
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buf += decoder.decode(value, { stream: true });
+                const parts = buf.split('\n\n');
+                buf = parts.pop() || '';
+                for (const part of parts) {
+                    if (!part.startsWith('data: ')) continue;
+                    try {
+                        const payload = JSON.parse(part.slice(6));
+                        if (payload.line != null) {
+                            logLines = [...logLines.slice(-(MAX_LOG_LINES - 1)), payload.line];
+                            if (autoScroll && logContainer) {
+                                requestAnimationFrame(() => {
+                                    if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
+                                });
+                            }
+                        }
+                    } catch { /* skip malformed */ }
+                }
+            }
+        } catch (e) {
+            if (e?.name !== 'AbortError') {
+                logLines = [...logLines, `[Connection error: ${e?.message || 'unknown'}]`];
+            }
+        } finally {
+            logConnected = false;
+        }
+    }
+
+    function disconnectLogStream() {
+        if (logAbort) {
+            logAbort.abort();
+            logAbort = null;
+        }
+        logConnected = false;
+    }
+
+    function clearLogView() {
+        logLines = [];
+    }
+
+    onDestroy(() => disconnectLogStream());
 
     /** @type {string | null} */
     let copiedKey = null;
@@ -454,6 +529,11 @@
             class="tab-btn {settingsTab === 'usage' ? 'active' : ''}"
             on:click={() => settingsTab = 'usage'}>
             Usage
+        </button>
+        <button
+            class="tab-btn {settingsTab === 'logs' ? 'active' : ''}"
+            on:click={() => settingsTab = 'logs'}>
+            Backend Logs
         </button>
     </div>
 
@@ -1005,6 +1085,28 @@ client = OpenAI(
                 </div>
             </div>
 
+        </div>
+    {/if}
+
+    {#if settingsTab === 'logs'}
+        <div class="logs-page">
+            <div class="logs-toolbar">
+                <div class="logs-toolbar-left">
+                    <span class="log-status" class:live={logConnected}>
+                        {logConnected ? 'Live' : 'Disconnected'}
+                    </span>
+                    <span class="log-count">{logLines.length} lines</span>
+                </div>
+                <div class="logs-toolbar-right">
+                    <label class="auto-scroll-label">
+                        <input type="checkbox" bind:checked={autoScroll} />
+                        Auto-scroll
+                    </label>
+                    <button class="logs-btn" on:click={clearLogView}>Clear View</button>
+                    <button class="logs-btn" on:click={connectLogStream}>Reconnect</button>
+                </div>
+            </div>
+            <pre class="log-viewer" bind:this={logContainer}>{logLines.join('\n')}</pre>
         </div>
     {/if}
 </div>
@@ -2400,4 +2502,90 @@ client = OpenAI(
     .arena-tag-chat { background: rgba(66,133,244,0.15); color: #4285f4; }
     .arena-tag-code { background: rgba(99,102,241,0.15); color: #818cf8; }
     .arena-tag-search { background: rgba(34,197,94,0.15); color: #22c55e; }
+
+    /* ── Backend Logs tab ──────────────────────────────────────────────── */
+    .logs-page {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        gap: 8px;
+    }
+
+    .logs-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 12px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-light);
+        border-radius: 8px;
+        flex-shrink: 0;
+    }
+
+    .logs-toolbar-left, .logs-toolbar-right {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .log-status {
+        font-size: 11px;
+        font-weight: 600;
+        padding: 2px 8px;
+        border-radius: 10px;
+        background: rgba(239, 68, 68, 0.15);
+        color: #ef4444;
+    }
+
+    .log-status.live {
+        background: rgba(34, 197, 94, 0.15);
+        color: #22c55e;
+    }
+
+    .log-count {
+        font-size: 11px;
+        color: var(--text-muted);
+    }
+
+    .auto-scroll-label {
+        font-size: 12px;
+        color: var(--text-secondary);
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        cursor: pointer;
+    }
+
+    .logs-btn {
+        font-size: 11px;
+        padding: 4px 10px;
+        border: 1px solid var(--border-medium);
+        border-radius: 6px;
+        background: var(--bg-tertiary);
+        color: var(--text-secondary);
+        cursor: pointer;
+    }
+
+    .logs-btn:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
+    }
+
+    .log-viewer {
+        flex: 1;
+        min-height: 0;
+        background: #0d1117;
+        color: #c9d1d9;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 11.5px;
+        line-height: 1.5;
+        padding: 12px 14px;
+        border-radius: 8px;
+        border: 1px solid var(--border-light);
+        overflow-y: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+        margin: 0;
+    }
 </style>

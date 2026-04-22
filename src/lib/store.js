@@ -150,6 +150,93 @@ export function addMessage(role, content, model = null, transport = null) {
     }]);
 }
 
+/**
+ * Add an assistant message with streaming text reveal effect.
+ * @param {string} content
+ * @param {string | null} [model]
+ * @param {string | null} [transport]
+ * @param {() => void} [onDone]
+ */
+export function addMessageStreaming(content, model = null, transport = null, onDone = undefined) {
+    const msgId = Date.now();
+
+    // If empty content, render instantly
+    if (!content) {
+        addMessage('assistant', '', model, transport);
+        if (onDone) onDone();
+        return msgId;
+    }
+
+    const words = content.split(/(\s+)/);
+    let index = 0;
+    let done = false;
+
+    // Add empty message with streaming flag
+    messages.update(msgs => [...msgs, {
+        id: msgId,
+        role: 'assistant',
+        content: '',
+        contentHtml: '',
+        model,
+        transport,
+        timestamp: new Date().toLocaleTimeString(),
+        streaming: true
+    }]);
+
+    function finishNow() {
+        if (done) return;
+        done = true;
+        clearTimeout(safetyTimer);
+        messages.update(msgs => msgs.map(m =>
+            m.id === msgId
+                ? { ...m, content, contentHtml: renderAssistantHtml(content, model), streaming: false }
+                : m
+        ));
+        if (onDone) onDone();
+    }
+
+    function streamNext() {
+        try {
+            if (done || index >= words.length) {
+                finishNow();
+                return;
+            }
+
+            // Ramp speed: 5 chars/tick at start → 14 at 33% progress
+            const progress = index / words.length;
+            const charsPerTick = Math.floor(5 + 9 * Math.min(1, progress * 3));
+
+            let chunk = '';
+            while (index < words.length && chunk.length < charsPerTick) {
+                chunk += words[index];
+                index++;
+            }
+
+            messages.update(msgs => msgs.map(m => {
+                if (m.id !== msgId) return m;
+                const newContent = m.content + chunk;
+                return {
+                    ...m,
+                    content: newContent,
+                    contentHtml: renderAssistantHtml(newContent, model)
+                };
+            }));
+
+            requestAnimationFrame(streamNext);
+        } catch (e) {
+            console.error('Streaming error:', e);
+            finishNow();
+        }
+    }
+
+    // Safety timeout: force-render after 30s
+    const safetyTimer = setTimeout(finishNow, 30000);
+
+    // Start on next frame
+    setTimeout(() => requestAnimationFrame(streamNext), 16);
+    return msgId;
+}
+
 export function clearMessages() {
     messages.set([]);
 }

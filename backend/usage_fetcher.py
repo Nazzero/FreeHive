@@ -293,7 +293,12 @@ async def fetch_gemini_usage() -> dict:
                 json={},
             )
         if resp.status_code == 200:
-            for bucket in resp.json().get("buckets", []):
+            raw_data = resp.json()
+            buckets = raw_data.get("buckets", [])
+            logger.info("[UsageFetcher] Gemini quota API response keys: %s", list(raw_data.keys()))
+            logger.info("[UsageFetcher] Gemini quota buckets count: %d", len(buckets))
+            for bucket in buckets:
+                logger.info("[UsageFetcher] Gemini bucket: %s", json.dumps(bucket, default=str))
                 model_id = bucket.get("modelId", "")
                 if not model_id:
                     continue
@@ -306,6 +311,8 @@ async def fetch_gemini_usage() -> dict:
                     "reset_label": _reset_label_from_iso(reset_time) if reset_time else "",
                     "limit_reached": remaining_pct == 0,
                 })
+        else:
+            logger.warning("[UsageFetcher] Gemini quota API returned %d: %s", resp.status_code, resp.text[:500])
     except Exception as exc:
         logger.warning("[UsageFetcher] Gemini live API failed: %s", exc)
 
@@ -313,6 +320,9 @@ async def fetch_gemini_usage() -> dict:
     if OMNIROUTE_DB.exists():
         live_models = {q["label"] for q in result["quotas"]}
         snapshots = _read_omniroute_snapshots("gemini-cli")
+        logger.info("[UsageFetcher] Gemini OmniRoute snapshots: %d entries, window_keys: %s",
+                    len(snapshots), [s.get("window_key") for s in snapshots])
+        logger.info("[UsageFetcher] Gemini live models (from API): %s", list(live_models))
         for snap in snapshots:
             window = snap.get("window_key", "")
             if window not in live_models:
