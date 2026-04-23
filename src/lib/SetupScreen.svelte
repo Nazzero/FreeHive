@@ -505,8 +505,14 @@
                 <img class="arena-teaser-logo" src="/logos/arena.png" alt="Arena" />
                 <div class="arena-teaser-text">
                     <span class="arena-teaser-title">150+ Arena Models</span>
-                    <span class="arena-teaser-desc">Access every model on LMSYS Chatbot Arena via Chrome extension bridge. Set up in the Arena panel after completing initial setup.</span>
+                    <span class="arena-teaser-desc">Access every model on LMSYS Chatbot Arena via Chrome extension bridge.</span>
                 </div>
+                <a class="action-btn primary arena-ext-btn"
+                   href="https://chromewebstore.google.com/detail/freehive-arena-bridge/jkclihigpeefogblifghhpojgkbheked?authuser=1&hl=en"
+                   target="_blank"
+                   rel="noopener noreferrer">
+                    Install Extension
+                </a>
             </div>
 
             <!-- ── Footer ─────────────────────────────────────────────── -->
@@ -1011,6 +1017,12 @@
         font-size: 12px;
         color: var(--text-secondary);
         line-height: 1.4;
+    }
+
+    .arena-ext-btn {
+        flex-shrink: 0;
+        text-decoration: none;
+        white-space: nowrap;
     }
 
     /* Footer */

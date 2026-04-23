@@ -639,24 +639,14 @@
                 <div class="step-number">2</div>
                 <div class="step-body">
                     <h3>Install Extension</h3>
-                    <p>The extension is already bundled with FreeHive. Follow these steps to load it in Chrome:</p>
-                    <ol class="install-steps">
-                        <li>Open Chrome and go to <code class="inline-code">chrome://extensions</code></li>
-                        <li>Enable <strong>Developer mode</strong> (toggle in top-right corner)</li>
-                        <li>Click <strong>Load unpacked</strong></li>
-                        <li>Select the extension folder below</li>
-                    </ol>
-                    {#if extensionPath}
-                        <div class="ext-path-box">
-                            <code class="ext-path">{extensionPath}</code>
-                            <button class="ext-open-btn" on:click={handleOpenExtensionFolder} disabled={openFolderLoading}>
-                                {openFolderLoading ? 'Opening...' : 'Open Folder'}
-                            </button>
-                        </div>
-                    {/if}
-                    {#if !extensionExists && extensionPath}
-                        <p class="hint" style="color: #f59e0b;">Extension folder not found — run Setup above first.</p>
-                    {/if}
+                    <p>Install the FreeHive Arena Bridge extension from the Chrome Web Store:</p>
+                    <a class="action-btn primary"
+                       href="https://chromewebstore.google.com/detail/freehive-arena-bridge/jkclihigpeefogblifghhpojgkbheked?authuser=1&hl=en"
+                       target="_blank"
+                       rel="noopener noreferrer"
+                       style="display: inline-block; text-decoration: none; margin-top: 8px;">
+                        Install from Chrome Web Store
+                    </a>
                 </div>
             </div>
             <div class="setup-step muted">
