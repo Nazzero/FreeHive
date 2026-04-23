@@ -32,4 +32,4 @@ $manifest.path = $HostCmd
 $manifest | ConvertTo-Json -Depth 8 | Set-Content -Path $TargetManifest -Encoding UTF8
 
 Write-Host "Native messaging host '$HostName' installed to $TargetDir"
-Write-Host "IMPORTANT: Update 'allowed_origins' in $TargetManifest with your real extension ID."
+Write-Host "Extension ID: jkclihigpeefogblifghhpojgkbheked (hardcoded)"

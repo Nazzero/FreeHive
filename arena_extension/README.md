@@ -11,21 +11,21 @@ It receives jobs from the native messaging host and executes direct
 - `content.js` - bridge between extension and page context
 - `page_bridge.js` - in-page stream fetch + SSE parsing
 
-## Local setup
+## Setup
 
-1. Load this folder as an unpacked extension in `chrome://extensions`.
-2. Get the extension ID from Chrome.
-3. Install native host manifest:
+Extension ID: `jkclihigpeefogblifghhpojgkbheked` (hardcoded, published on Chrome Web Store)
+
+1. Install from Chrome Web Store: https://chromewebstore.google.com/detail/freehive-arena-bridge/jkclihigpeefogblifghhpojgkbheked
+2. Install native host manifest:
 
 ```bash
 cd native_host
-./install_host.sh
+./install_host.sh        # Linux
+./install_host_macos.sh  # macOS
+# Windows: run install_host_windows.ps1 in PowerShell
 ```
 
-4. Reload the extension after manifest install and replace `<EXTENSION_ID_PLACEHOLDER>`
-   in `~/.config/google-chrome/NativeMessagingHosts/com.freehive.arena_bridge.json`
-   with your real extension id.
-5. Start backend and native host, then run smoke tests.
+3. Start backend and native host, then run smoke tests.
 
 ## Notes
 

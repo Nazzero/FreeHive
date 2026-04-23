@@ -28,4 +28,4 @@ with open(target_manifest, "w", encoding="utf-8") as f:
 PY
 
 echo "Native messaging host '${HOST_NAME}' installed to ${TARGET_DIR}"
-echo "IMPORTANT: You must update the 'allowed_origins' in ${TARGET_MANIFEST} with your extension ID after loading it in Chrome."
+echo "Extension ID: jkclihigpeefogblifghhpojgkbheked (hardcoded)"

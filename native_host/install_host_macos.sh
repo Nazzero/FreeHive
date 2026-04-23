@@ -30,4 +30,4 @@ with open(target_manifest, "w", encoding="utf-8") as f:
 PY
 
 echo "Native messaging host '${HOST_NAME}' installed to ${TARGET_DIR}"
-echo "IMPORTANT: Update 'allowed_origins' in ${TARGET_MANIFEST} with your real extension ID."
+echo "Extension ID: jkclihigpeefogblifghhpojgkbheked (hardcoded)"

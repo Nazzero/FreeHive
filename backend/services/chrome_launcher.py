@@ -126,31 +126,12 @@ def _get_native_host_manifest_path() -> Path | None:
     return None
 
 
+KNOWN_EXTENSION_ID = "jkclihigpeefogblifghhpojgkbheked"
+
+
 def detect_extension_id() -> str | None:
-    """Try to detect the FreeHive extension ID from Chrome's preferences."""
-    prefs_file = Path.home() / ".config" / "google-chrome" / "Default" / "Preferences"
-    if platform.system() == "Darwin":
-        prefs_file = Path.home() / "Library" / "Application Support" / "Google" / "Chrome" / "Default" / "Preferences"
-    if platform.system() == "Windows":
-        prefs_file = Path.home() / "AppData" / "Local" / "Google" / "Chrome" / "User Data" / "Default" / "Preferences"
-
-    if not prefs_file.exists():
-        return None
-
-    try:
-        import json
-        with open(prefs_file, "r") as f:
-            prefs = json.load(f)
-        exts = prefs.get("extensions", {}).get("settings", {})
-        for ext_id, info in exts.items():
-            path = str(info.get("path", ""))
-            manifest = info.get("manifest", {})
-            name = manifest.get("name", "")
-            if "arena_extension" in path or "FreeHive Arena" in name:
-                return ext_id
-    except Exception as exc:
-        logger.debug("[ChromeLauncher] Failed to read Chrome prefs: %s", exc)
-    return None
+    """Return the published Chrome Web Store extension ID."""
+    return KNOWN_EXTENSION_ID
 
 
 def patch_native_host_manifest(extension_id: str) -> bool:
