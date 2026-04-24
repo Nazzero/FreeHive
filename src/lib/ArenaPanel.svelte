@@ -28,6 +28,9 @@
     let extensionPath = '';
     let extensionExists = false;
     let openFolderLoading = false;
+    let setupStep = 1;          // tracks which step user is on (1, 2, 3)
+    let checkingConnection = false;
+    let connectionMessage = '';
 
     // Probe state
     let probing = false;
@@ -240,21 +243,8 @@
         try {
             const result = await setupArena();
             if (result?.success) {
-                setupMessage = result.message || 'Chrome launched with extension. Log in to arena.ai if needed.';
-                // Poll for bridge connection
-                let attempts = 0;
-                const poll = setInterval(async () => {
-                    attempts++;
-                    if (attempts > 30) { clearInterval(poll); return; } // 30s timeout
-                    try {
-                        const s = await getArenaStatus();
-                        if (s?.bridge_active) {
-                            clearInterval(poll);
-                            setupMessage = 'Extension connected! Loading models...';
-                            await fetchStatus();
-                        }
-                    } catch { /* ignore */ }
-                }, 1000);
+                setupMessage = 'Chrome opened — log in to arena.ai with Google.';
+                setupStep = 2;
             } else {
                 error = result?.chrome?.error || result?.message || 'Setup failed.';
             }
@@ -263,6 +253,35 @@
         } finally {
             setupLoading = false;
         }
+    }
+
+    async function handleCheckConnection() {
+        checkingConnection = true;
+        connectionMessage = '';
+        error = '';
+        let attempts = 0;
+        const maxAttempts = 15;
+        const check = async () => {
+            attempts++;
+            try {
+                const s = await getArenaStatus();
+                if (s?.bridge_active) {
+                    connectionMessage = 'Connected! Loading models...';
+                    checkingConnection = false;
+                    await fetchStatus();
+                    return;
+                }
+            } catch { /* ignore */ }
+            if (attempts < maxAttempts) {
+                connectionMessage = `Checking... (${attempts}/${maxAttempts})`;
+                setTimeout(check, 2000);
+            } else {
+                connectionMessage = '';
+                error = 'Could not detect extension bridge. Make sure the extension is installed and arena.ai is open in Chrome.';
+                checkingConnection = false;
+            }
+        };
+        await check();
     }
 
     async function handleOpenExtensionFolder() {
@@ -620,44 +639,85 @@
         <p class="empty">Checking browser status...</p>
 
     {:else if !(status?.bridge_active || (status?.browser_available ?? status?.steel_available))}
-        <!-- State A: No transport available -->
+        <!-- State A: No transport available — 3-step progressive setup -->
         <div class="setup-card">
-            <div class="setup-step">
-                <div class="step-number">1</div>
+            <!-- Step 1: Login to Arena -->
+            <div class="setup-step {setupStep > 1 ? 'done' : ''}">
+                <div class="step-number {setupStep > 1 ? 'check' : ''}">{setupStep > 1 ? '\u2713' : '1'}</div>
                 <div class="step-body">
-                    <h3>Setup Arena Bridge</h3>
-                    <p>Click below to install the native host and launch Chrome with the Arena extension.</p>
-                    <button class="action-btn primary" on:click={handleSetup} disabled={setupLoading}>
-                        {setupLoading ? 'Setting up...' : 'Setup Arena.ai'}
-                    </button>
+                    <h3>Login to Arena.ai</h3>
+                    <p>Opens Chrome and navigates to arena.ai — sign in with your Google account.</p>
+                    <p class="hint">Arena.ai must remain open in Chrome for FreeHive to access models.</p>
+                    {#if setupStep === 1}
+                        <button class="action-btn primary" on:click={handleSetup} disabled={setupLoading}>
+                            {setupLoading ? 'Opening Chrome...' : 'Open Arena.ai'}
+                        </button>
+                    {/if}
                     {#if setupMessage}
                         <div class="login-message">{setupMessage}</div>
                     {/if}
                 </div>
             </div>
-            <div class="setup-step muted">
-                <div class="step-number">2</div>
+
+            <!-- Step 2: Install Extension -->
+            <div class="setup-step {setupStep > 2 ? 'done' : ''} {setupStep < 2 ? 'muted' : ''}">
+                <div class="step-number {setupStep > 2 ? 'check' : ''}">{setupStep > 2 ? '\u2713' : '2'}</div>
                 <div class="step-body">
                     <h3>Install Extension</h3>
-                    <p>Install the FreeHive Arena Bridge extension from the Chrome Web Store:</p>
-                    <a class="action-btn primary"
-                       href="https://chromewebstore.google.com/detail/freehive-arena-bridge/jkclihigpeefogblifghhpojgkbheked?authuser=1&hl=en"
-                       target="_blank"
-                       rel="noopener noreferrer"
-                       style="display: inline-block; text-decoration: none; margin-top: 8px;">
-                        Install from Chrome Web Store
-                    </a>
+                    <p>Install the FreeHive Arena Bridge extension in Chrome.</p>
+                    {#if setupStep >= 2}
+                        <div class="ext-install-options">
+                            <a class="action-btn primary"
+                               href="https://chromewebstore.google.com/detail/freehive-arena-bridge/jkclihigpeefogblifghhpojgkbheked"
+                               target="_blank"
+                               rel="noopener noreferrer"
+                               style="display: inline-block; text-decoration: none;">
+                                Install from Chrome Web Store
+                            </a>
+                            <details class="manual-install-details">
+                                <summary>Manual install (if Chrome Web Store unavailable)</summary>
+                                <ol class="install-steps">
+                                    <li>Open <code class="inline-code">chrome://extensions</code> in Chrome</li>
+                                    <li>Enable <strong>Developer mode</strong> (top-right toggle)</li>
+                                    <li>Click <strong>Load unpacked</strong></li>
+                                    <li>Select the extension folder:</li>
+                                </ol>
+                                {#if extensionPath}
+                                    <div class="ext-path-box">
+                                        <code class="ext-path">{extensionPath}</code>
+                                        <button class="ext-open-btn" on:click={handleOpenExtensionFolder} disabled={openFolderLoading}>
+                                            {openFolderLoading ? 'Opening...' : 'Open Folder'}
+                                        </button>
+                                    </div>
+                                {/if}
+                            </details>
+                        </div>
+                        {#if setupStep === 2}
+                            <button class="action-btn" on:click={() => setupStep = 3} style="margin-top: 8px;">
+                                Done — Next Step
+                            </button>
+                        {/if}
+                    {/if}
                 </div>
             </div>
-            <div class="setup-step muted">
+
+            <!-- Step 3: Check Connection -->
+            <div class="setup-step {setupStep < 3 ? 'muted' : ''}">
                 <div class="step-number">3</div>
                 <div class="step-body">
-                    <h3>Log in to Arena.ai</h3>
-                    <p>Sign in with Google in the Chrome tab, then pin the tab. Click <strong>Refresh</strong> above when done.</p>
+                    <h3>Check Connection</h3>
+                    <p>Verify the extension is connected and Arena.ai is reachable.</p>
+                    {#if setupStep >= 3}
+                        <button class="action-btn primary" on:click={handleCheckConnection} disabled={checkingConnection}>
+                            {checkingConnection ? 'Checking...' : 'Check Connection'}
+                        </button>
+                        {#if connectionMessage}
+                            <div class="login-message">{connectionMessage}</div>
+                        {/if}
+                    {/if}
                 </div>
             </div>
         </div>
-        <button class="action-btn" on:click={fetchStatus}>Check Again</button>
 
     {:else if !status?.authenticated}
         <!-- State B: CloakBrowser available, not logged in -->
@@ -1034,6 +1094,14 @@
     .code-block { display: flex; align-items: flex-start; gap: 8px; background: var(--bg-primary); border: 1px solid var(--border-medium); border-radius: 6px; padding: 10px 12px; }
     .code-block code { flex: 1; font-family: ui-monospace, Menlo, Monaco, monospace; font-size: 11.5px; color: var(--text-primary); word-break: break-all; white-space: pre-wrap; }
     .inline-code { font-family: ui-monospace, Menlo, Monaco, monospace; font-size: 12px; background: var(--bg-tertiary); padding: 1px 5px; border-radius: 3px; }
+    .ext-install-options { display: flex; flex-direction: column; gap: 8px; }
+    .manual-install-details { margin-top: 4px; }
+    .manual-install-details summary {
+        font-size: 12px; color: var(--text-muted); cursor: pointer;
+        padding: 4px 0; user-select: none;
+    }
+    .manual-install-details summary:hover { color: var(--text-secondary); }
+    .manual-install-details[open] summary { margin-bottom: 6px; }
     .install-steps {
         padding-left: 20px; margin: 6px 0; display: flex; flex-direction: column; gap: 4px;
         font-size: 13px; color: var(--text-secondary);
