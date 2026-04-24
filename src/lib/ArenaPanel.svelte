@@ -277,12 +277,24 @@
                 connectionMessage = `Checking... (${attempts}/${maxAttempts})`;
                 setTimeout(check, 2000);
             } else {
-                connectionMessage = '';
-                error = 'Could not detect extension bridge. Try these:\n' +
-                    '1. Refresh the arena.ai tab in Chrome (the extension needs the page to reload after install)\n' +
-                    '2. Make sure arena.ai is open and you are logged in\n' +
-                    '3. Check that the extension shows "FreeHive Arena Bridge" in chrome://extensions';
+                // Fetch diagnostics to show what's missing
                 checkingConnection = false;
+                connectionMessage = '';
+                try {
+                    const cs = await getArenaChromeStatus();
+                    const issues = [];
+                    if (!cs.chrome_installed) issues.push('Chrome is not installed');
+                    if (!cs.native_host_installed) issues.push('Native host not installed — click "Open Arena.ai" in Step 1 to install it');
+                    if (!cs.extension_dir_exists) issues.push('Extension files not found');
+                    if (!cs.bridge_connected) issues.push('Extension bridge not responding — refresh the arena.ai tab in Chrome');
+                    if (issues.length > 0) {
+                        error = 'Connection check failed:\n' + issues.map((s, i) => `${i + 1}. ${s}`).join('\n');
+                    } else {
+                        error = 'All components detected but bridge not active. Close Chrome completely, then click "Open Arena.ai" in Step 1 to relaunch.';
+                    }
+                } catch {
+                    error = 'Could not detect extension bridge. Make sure Chrome is open with arena.ai and the extension is installed.';
+                }
             }
         };
         await check();
