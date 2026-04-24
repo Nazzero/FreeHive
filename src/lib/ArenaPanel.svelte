@@ -257,15 +257,16 @@
 
     async function handleCheckConnection() {
         checkingConnection = true;
-        connectionMessage = '';
+        connectionMessage = 'Checking connection...';
         error = '';
         let attempts = 0;
-        const maxAttempts = 15;
+        const maxAttempts = 20;
         const check = async () => {
             attempts++;
             try {
                 const s = await getArenaStatus();
-                if (s?.bridge_active) {
+                const connected = s?.bridge_active || s?.browser_available || s?.steel_available;
+                if (connected) {
                     connectionMessage = 'Connected! Loading models...';
                     checkingConnection = false;
                     await fetchStatus();
@@ -277,7 +278,10 @@
                 setTimeout(check, 2000);
             } else {
                 connectionMessage = '';
-                error = 'Could not detect extension bridge. Make sure the extension is installed and arena.ai is open in Chrome.';
+                error = 'Could not detect extension bridge. Try these:\n' +
+                    '1. Refresh the arena.ai tab in Chrome (the extension needs the page to reload after install)\n' +
+                    '2. Make sure arena.ai is open and you are logged in\n' +
+                    '3. Check that the extension shows "FreeHive Arena Bridge" in chrome://extensions';
                 checkingConnection = false;
             }
         };
@@ -632,7 +636,7 @@
     <p class="panel-subtitle">Access arena.ai models via Chrome Extension bridge{status?.transport === 'cloakbrowser' ? ' (CloakBrowser fallback)' : ''}.</p>
 
     {#if error}
-        <div class="alert error">{error}</div>
+        <div class="alert error" style="white-space: pre-line;">{error}</div>
     {/if}
 
     {#if loading}
@@ -664,7 +668,7 @@
                 <div class="step-number {setupStep > 2 ? 'check' : ''}">{setupStep > 2 ? '\u2713' : '2'}</div>
                 <div class="step-body">
                     <h3>Install Extension</h3>
-                    <p>Install the FreeHive Arena Bridge extension in Chrome.</p>
+                    <p>Install the FreeHive Arena Bridge extension in Chrome, then <strong>refresh the arena.ai tab</strong>.</p>
                     {#if setupStep >= 2}
                         <div class="ext-install-options">
                             <a class="action-btn primary"
