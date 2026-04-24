@@ -21,23 +21,181 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if ROOT_DIR not in sys.path:
-    sys.path.insert(0, ROOT_DIR)
+# ---------------------------------------------------------------------------
+# Inlined from backend.services.arena_bridge_transport and
+# shared.arena_bridge_protocol so host.py is fully self-contained.
+# This is required for frozen (PyInstaller) builds where these modules
+# live inside the bundle and are NOT accessible to a system Python.
+# DO NOT replace with imports — the native host runs as a standalone
+# process launched by Chrome, outside of the PyInstaller environment.
+# ---------------------------------------------------------------------------
 
-from backend.services.arena_bridge_transport import (  # noqa: E402
-    get_bridge_socket_path,
-    get_bridge_tcp_host,
-    get_bridge_tcp_port,
-    get_bridge_transport,
-)
-from shared.arena_bridge_protocol import (  # noqa: E402
-    BridgeErrorCode,
-    BridgeMessageType,
-    ArenaBridgeError,
-    ArenaBridgeJob,
-    build_run_job_message,
-)
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Mapping
+
+# -- Transport config (from arena_bridge_transport) --
+
+_DEFAULT_UNIX_SOCKET_PATH = "/tmp/freehive_arena_bridge.sock"
+_DEFAULT_TCP_HOST = "127.0.0.1"
+_DEFAULT_TCP_PORT = 8766
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = str(os.getenv(name, "")).strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    if value < 1 or value > 65535:
+        return default
+    return value
+
+
+def get_bridge_transport() -> str:
+    raw = str(os.getenv("FREEHIVE_ARENA_BRIDGE_TRANSPORT", "")).strip().lower()
+    if raw in {"unix", "tcp"}:
+        return raw
+    return "tcp" if os.name == "nt" else "unix"
+
+
+def get_bridge_socket_path() -> str:
+    return str(
+        os.getenv("FREEHIVE_ARENA_BRIDGE_SOCKET", _DEFAULT_UNIX_SOCKET_PATH)
+    ).strip() or _DEFAULT_UNIX_SOCKET_PATH
+
+
+def get_bridge_tcp_host() -> str:
+    return str(os.getenv("FREEHIVE_ARENA_BRIDGE_HOST", _DEFAULT_TCP_HOST)).strip() or _DEFAULT_TCP_HOST
+
+
+def get_bridge_tcp_port() -> int:
+    return _env_int("FREEHIVE_ARENA_BRIDGE_PORT", _DEFAULT_TCP_PORT)
+
+
+# -- Protocol (from arena_bridge_protocol) --
+
+_PROTOCOL_VERSION = "2026-04-08.v1"
+_DEFAULT_JOB_TIMEOUT_MS = 120_000
+_MAX_JOB_TIMEOUT_MS = 300_000
+
+
+class BridgeMessageType(str, Enum):
+    HELLO = "hello"
+    PING = "ping"
+    PONG = "pong"
+    RUN_JOB = "run_job"
+    JOB_STARTED = "job_started"
+    STREAM_EVENT = "stream_event"
+    JOB_COMPLETE = "job_complete"
+    JOB_FAILED = "job_failed"
+
+
+class BridgeErrorCode(str, Enum):
+    HOST_UNREACHABLE = "host_unreachable"
+    EXTENSION_OFFLINE = "extension_offline"
+    HOST_BAD_RESPONSE = "host_bad_response"
+    JOB_NOT_FOUND = "job_not_found"
+    JOB_TIMEOUT = "job_timeout"
+    PROMPT_FAILED = "prompt_failed"
+    MODEL_MISMATCH = "model_mismatch"
+    LOGIN_REQUIRED = "login_required"
+    TRANSPORT_ERROR = "transport_error"
+    INTERNAL_ERROR = "internal_error"
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_timeout(timeout_ms: int) -> int:
+    return min(max(1_000, int(timeout_ms)), _MAX_JOB_TIMEOUT_MS)
+
+
+@dataclass(slots=True)
+class ArenaBridgeError:
+    code: str
+    message: str
+    retryable: bool = False
+    details: dict[str, Any] = field(default_factory=dict)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "message": self.message,
+            "retryable": self.retryable,
+            "details": dict(self.details),
+        }
+
+
+@dataclass(slots=True)
+class ArenaBridgeJob:
+    job_id: str
+    session_id: str
+    model: str
+    message: str
+    conversation_id: str | None = None
+    timeout_ms: int = _DEFAULT_JOB_TIMEOUT_MS
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: str = field(default_factory=_utc_now_iso)
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ArenaBridgeJob":
+        def _req_str(key: str) -> str:
+            v = payload.get(key)
+            if not isinstance(v, str) or not v.strip():
+                raise ValueError(f"'{key}' must be a non-empty string")
+            return v.strip()
+
+        timeout_raw = payload.get("timeout_ms", _DEFAULT_JOB_TIMEOUT_MS)
+        try:
+            timeout = _normalize_timeout(int(timeout_raw))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("'timeout_ms' must be an integer") from exc
+
+        conv_id = payload.get("conversation_id")
+        if conv_id is not None and not isinstance(conv_id, str):
+            raise ValueError("'conversation_id' must be a string when present")
+
+        md = payload.get("metadata")
+        metadata = dict(md) if isinstance(md, dict) else {}
+
+        return cls(
+            job_id=_req_str("job_id"),
+            session_id=_req_str("session_id"),
+            model=_req_str("model"),
+            message=_req_str("message"),
+            conversation_id=(conv_id.strip() or None) if conv_id else None,
+            timeout_ms=timeout,
+            metadata=metadata,
+            created_at=str(payload.get("created_at") or _utc_now_iso()),
+        )
+
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "job_id": self.job_id,
+            "session_id": self.session_id,
+            "model": self.model,
+            "message": self.message,
+            "timeout_ms": _normalize_timeout(self.timeout_ms),
+            "metadata": dict(self.metadata),
+            "created_at": self.created_at,
+        }
+        if self.conversation_id:
+            payload["conversation_id"] = self.conversation_id
+        return payload
+
+
+def build_run_job_message(job: ArenaBridgeJob) -> dict[str, Any]:
+    return {
+        "type": BridgeMessageType.RUN_JOB.value,
+        "protocol_version": _PROTOCOL_VERSION,
+        "sent_at": _utc_now_iso(),
+        "job": job.to_payload(),
+    }
 
 LOG_DIR = Path.home() / ".freehive" / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
