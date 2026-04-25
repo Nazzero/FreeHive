@@ -305,6 +305,8 @@ def open_extension_folder() -> dict:
 
 def get_chrome_status() -> dict:
     """Return current state of Chrome + extension setup."""
+    from backend.services.arena_bridge_transport import is_bridge_available
+
     chrome_binary = _find_chrome_binary()
     return {
         "chrome_installed": chrome_binary is not None,
@@ -313,4 +315,5 @@ def get_chrome_status() -> dict:
         "extension_dir_exists": EXTENSION_DIR.exists(),
         "extension_path": str(EXTENSION_DIR.resolve()),
         "native_host_installed": _is_native_host_installed(),
+        "bridge_connected": is_bridge_available(timeout_s=1.0),
     }
