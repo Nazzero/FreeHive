@@ -41,6 +41,39 @@ IS_WINDOWS = os.name == "nt"
 IS_MACOS = sys.platform == "darwin"
 HAS_PTY_SUPPORT = (not IS_WINDOWS) and (pty is not None) and (fcntl is not None)
 
+
+def _refreshed_env() -> dict[str, str]:
+    """Return os.environ with PATH refreshed from Windows registry.
+
+    On Windows, tools installed mid-session (fnm, node) update the registry
+    PATH but the current process still has the stale value.  This reads the
+    live Machine+User PATH so subprocesses can find node/npm/cli wrappers.
+    On non-Windows, returns os.environ unchanged.
+    """
+    env = os.environ.copy()
+    if not IS_WINDOWS:
+        return env
+    try:
+        import winreg
+        parts: list[str] = []
+        for root, sub in [
+            (winreg.HKEY_LOCAL_MACHINE,
+             r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+            (winreg.HKEY_CURRENT_USER, r"Environment"),
+        ]:
+            try:
+                with winreg.OpenKey(root, sub) as key:
+                    val, _ = winreg.QueryValueEx(key, "Path")
+                    if val:
+                        parts.append(val)
+            except OSError:
+                pass
+        if parts:
+            env["PATH"] = ";".join(parts)
+    except ImportError:
+        pass
+    return env
+
 # Use login shell for UNIX so nvm/pyenv/etc are sourced.
 _SHELL = ["cmd", "/c"] if IS_WINDOWS else ["bash", "-l", "-c"]
 
@@ -70,17 +103,21 @@ def _strip_ansi(text: str) -> str:
 
 
 def _get_binary_path(name: str) -> str | None:
-    found = shutil.which(name)
+    # On Windows, refresh PATH from registry so mid-session installs are found
+    path_override = _refreshed_env().get("PATH") if IS_WINDOWS else None
+    found = shutil.which(name, path=path_override)
     if found:
         return found
 
     if IS_WINDOWS:
         try:
+            env = _refreshed_env()
             result = subprocess.run(
                 ["where", name],
                 capture_output=True,
                 text=True,
                 timeout=10,
+                env=env,
             )
             if result.returncode == 0:
                 for line in result.stdout.splitlines():
@@ -535,6 +572,7 @@ async def install_tool(request: InstallRequest):
             cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            env=_refreshed_env(),
         )
 
         async for raw_line in process.stdout:
@@ -956,7 +994,8 @@ async def start_auth(tool: str):
                     pass
         else:
             # Windows fallback: no PTY available — use pipes instead
-            env = os.environ.copy()
+            # Use refreshed PATH so node/npm installed mid-session are found
+            env = _refreshed_env()
             if is_gemini:
                 env["TERM"] = "dumb"
                 env["GOOGLE_GENAI_USE_GCA"] = "true"
