@@ -337,13 +337,13 @@
                     <div class="prereq-grid">
                         <div class="prereq-row">
                             <span class="check {status.prerequisites.node ? 'ok' : 'fail'}">
-                                {status.prerequisites.node ? '&#10003;' : '&#10007;'}
+                                {status.prerequisites.node ? '✓' : '✗'}
                             </span>
                             <span class="prereq-name">Node.js</span>
                         </div>
                         <div class="prereq-row">
                             <span class="check {status.prerequisites.npm ? 'ok' : 'fail'}">
-                                {status.prerequisites.npm ? '&#10003;' : '&#10007;'}
+                                {status.prerequisites.npm ? '✓' : '✗'}
                             </span>
                             <span class="prereq-name">npm</span>
                         </div>

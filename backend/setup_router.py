@@ -636,7 +636,7 @@ async def install_node():
                 # Step 1: install fnm
                 rc = await _run_with_timeout(
                     ["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                     "irm https://fnm.vercel.app/install.ps1 | iex"],
+                     "winget install Schniz.fnm --accept-package-agreements --accept-source-agreements"],
                     timeout=120, stream_cb=collect,
                 )
                 for l in lines:
@@ -653,16 +653,16 @@ async def install_node():
                     return
 
                 # Step 2: install Node LTS via fnm
-                # fnm installs to %USERPROFILE%\.fnm — refresh PATH for this session
+                # winget adds fnm to user PATH but current process doesn't see it
+                # Refresh PATH from registry then run fnm
                 yield _sse({"status": "output", "msg": "Installing Node.js LTS via fnm..."})
-                fnm_path = Path.home() / ".fnm"
-                path_env = os.environ.get("PATH", "")
-                env = {**os.environ, "PATH": f"{fnm_path}{os.pathsep}{path_env}"}
 
                 rc = await _run_with_timeout(
-                    ["cmd", "/c",
-                     "fnm install --lts && fnm default lts-latest"],
-                    timeout=180, stream_cb=collect, env=env,
+                    ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                     '$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + '
+                     '[System.Environment]::GetEnvironmentVariable("Path","User"); '
+                     'fnm install --lts; if ($LASTEXITCODE -eq 0) { fnm default lts-latest }'],
+                    timeout=180, stream_cb=collect,
                 )
                 for l in lines:
                     yield _sse({"status": "output", "msg": l})
