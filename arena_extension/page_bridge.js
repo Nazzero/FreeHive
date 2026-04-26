@@ -675,6 +675,49 @@
     return "/nextjs-api/stream/create-evaluation";
   }
 
+  /**
+   * Resolve which modality to send for a given model. arena.ai routes
+   * create-evaluation requests by the `modality` field in the payload —
+   * sending modality:"chat" for a webdev-only model (e.g. gpt-5.3-codex,
+   * gpt-5.4-high) gets a 200 with body "Model not found", which surfaces
+   * in FreeHive as 'Arena model unavailable right now'. Without this
+   * lookup the bridge hardcoded modality:"chat", silently breaking every
+   * code-only model in the catalog.
+   *
+   * Returns "chat" when the model has chat support (covers chat-only AND
+   * the chat+webdev overlap models like glm-5 / claude-sonnet-4-6 /
+   * qwen3-coder-480b-…). Returns "webdev" only when the model is
+   * code-only (rankByModality has webdev/code but no chat). Defaults to
+   * "chat" if hydration data isn't reachable so we don't regress the
+   * common path.
+   *
+   * @param {string} requestedModel - model name with or without arena/ prefix
+   * @returns {"chat" | "webdev"}
+   */
+  function resolveModalityForModel(requestedModel) {
+    const cleaned = String(requestedModel || "").replace(/^arena\//, "").trim().toLowerCase();
+    if (!cleaned) return "chat";
+    try {
+      const initialModels = collectInitialModelsFromHtml();
+      for (const m of initialModels) {
+        const candidates = [m.publicName, m.slug, m.name, m.displayName, m.modelName]
+          .map((v) => String(v || "").toLowerCase());
+        if (!candidates.includes(cleaned)) continue;
+        const rbm = m.rankByModality || {};
+        const isChat = Object.prototype.hasOwnProperty.call(rbm, "chat");
+        const isCode = Object.prototype.hasOwnProperty.call(rbm, "webdev")
+                    || Object.prototype.hasOwnProperty.call(rbm, "code");
+        // Overlap (chat AND webdev) → use chat (the user-facing default,
+        // and confirmed working in production with glm-5 / qwen3.6-plus).
+        // Code-only → use webdev.
+        if (isChat) return "chat";
+        if (isCode) return "webdev";
+        return "chat";
+      }
+    } catch (_error) { /* fall through */ }
+    return "chat";
+  }
+
   function detectRecaptchaSiteKey() {
     const fromScript = Array.from(document.scripts || [])
       .map((s) => s.src || "")
@@ -886,6 +929,9 @@
     const isFollowup = Boolean(job.conversation_id);
     const evaluationId = isFollowup ? String(job.conversation_id) : uuidV7();
     const modelAId = resolveModelAId(job.model);
+    // Per-model modality routing — see resolveModalityForModel for why
+    // hardcoding "chat" broke gpt-5.3-codex / gpt-5.4-high / etc.
+    const modality = resolveModalityForModel(job.model);
 
     return {
       id: evaluationId,
@@ -899,7 +945,7 @@
         experimental_attachments: [],
         metadata: {}
       },
-      modality: "chat",
+      modality,
       recaptchaV3Token: recaptchaToken || ""
     };
   }
