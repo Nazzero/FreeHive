@@ -1493,6 +1493,32 @@
       throw fatalError;
     }
 
+    // ── Battle Mode detection ──
+    // Arena.ai randomly shows "Response A" / "Response B" side-by-side
+    // comparison with "Continue with A" / "Continue with B" buttons.
+    // When this happens the stream may deliver text for both responses
+    // or the page may show two .prose elements. Detect and auto-pick
+    // Response A, then click "Continue with A" to dismiss.
+    // If the stream returned empty text, wait briefly for DOM to render.
+    let battleMode = false;
+    if (!finalText.trim()) {
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    const continueA = [...document.querySelectorAll("button")].find(
+      b => (b.textContent || "").trim().includes("Continue with A")
+    );
+    if (continueA) {
+      battleMode = true;
+      const proses = document.querySelectorAll(".prose");
+      if (proses.length > 0) {
+        const responseAText = (proses[0].innerText || "").trim();
+        if (responseAText) {
+          finalText = responseAText;
+        }
+      }
+      try { continueA.click(); } catch (_) {}
+    }
+
     if (!conversationId && typeof payload.id === "string" && payload.id) {
       conversationId = payload.id;
     }
@@ -1515,7 +1541,8 @@
         conversation_id: conversationId,
         effective_model: detectEffectiveModel(job.model),
         raw_event_count: eventCount,
-        tool_calls: collectedToolCalls
+        tool_calls: collectedToolCalls,
+        battle_mode: battleMode || undefined
       }
     });
 
