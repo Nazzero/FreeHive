@@ -256,66 +256,63 @@ async def arena_models(request: Request):
 
 @router.post("/arena/models/refresh")
 async def arena_models_refresh(request: Request):
-    """Refresh model list from arena.ai — fetches both chat and code dropdowns, saves to cache."""
+    """Refresh model list from arena.ai — single-shot read of page hydration.
+
+    Uses the `fetch_all_models` bridge operation, which extracts the entire
+    arena.ai model catalog from the page's hydration JSON in one read. The
+    bridge classifies modes from each model's `rankByModality` keys
+    (`chat` / `webdev`) so we get chat + code (including code-only models
+    like the gpt-5.x-codex family) without navigating between pages.
+
+    Previous implementation called `fetch_models` twice after navigating
+    /text/direct -> /code/direct via window.location.href + 3 s sleep.
+    That raced page hydration and frequently returned `code_models = []`,
+    leaving every model tagged chat-only in the UI even when arena.ai
+    actually exposes ~90+ webdev-capable models. The single-shot
+    hydration read is immune to that race.
+    """
     _require_arena_enabled()
     from backend.services.arena_bridge_client import ArenaBridgeClient
     from backend.services.arena_model_cache import save_cache, get_full_cache
     from backend.services.arena_bridge_transport import is_bridge_available
-    import asyncio
 
     if not is_bridge_available():
         raise HTTPException(status_code=503, detail="Extension bridge not connected. Open Chrome with the Arena extension.")
 
     client = ArenaBridgeClient()
 
-    async def _fetch_from_page(url: str) -> tuple[list[str], dict]:
-        """Navigate to url, wait for page load, read dropdown."""
-        # Navigate
-        async for update in client.send_chat(
-            model="nav", message="__NAV__", session_id="nav",
-            timeout_ms=10000, metadata={"operation": "navigate", "url": url},
-        ):
-            pass
-        await asyncio.sleep(3)
-        # Fetch models
-        models = []
-        caps = {}
-        async for update in client.send_chat(
-            model="fetch", message="__FETCH__", session_id="refresh",
-            timeout_ms=15000, metadata={"operation": "fetch_models"},
-        ):
-            if update.get("type") == "JOB_COMPLETE":
-                meta = update.get("metadata") or {}
-                models = meta.get("models", [])
-                caps = meta.get("capabilities", {})
-        return models, caps
-
-    # Fetch from both pages
-    chat_models, chat_caps = await _fetch_from_page("https://arena.ai/text/direct")
-    code_models, code_caps = await _fetch_from_page("https://arena.ai/code/direct")
-
-    # Navigate back to text/direct
+    chat_models: list[str] = []
+    code_models: list[str] = []
+    all_caps: dict[str, list[str]] = {}
+    model_modes: dict[str, list[str]] = {}
+    diagnostics: dict = {}
+    source = "unknown"
     async for update in client.send_chat(
-        model="nav", message="__NAV__", session_id="nav-back",
-        timeout_ms=10000, metadata={"operation": "navigate", "url": "https://arena.ai/text/direct"},
+        model="fetch", message="__FETCH_ALL__", session_id="refresh-all",
+        timeout_ms=20000, metadata={"operation": "fetch_all_models"},
     ):
-        pass
+        if update.get("type") == "JOB_COMPLETE":
+            meta = update.get("metadata") or {}
+            chat_models = list(meta.get("chat_models", []))
+            code_models = list(meta.get("code_models", []))
+            all_caps = dict(meta.get("capabilities", {}))
+            model_modes = dict(meta.get("model_modes", {}))
+            source = str(meta.get("source", "unknown"))
+            diagnostics = dict(meta.get("diagnostics") or {})
 
-    # Merge capabilities
-    all_caps = {**chat_caps, **code_caps}
+    if not chat_models and not code_models:
+        # Bridge yielded nothing. Common causes: arena.ai tab still
+        # hydrating, or extension lost its hooks after navigation. Surface
+        # rather than silently caching empty data.
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Arena bridge returned no models. The arena.ai tab may still "
+                "be loading or the extension lost its hydration source. "
+                "Refresh the arena.ai tab in Chrome and try again."
+            ),
+        )
 
-    # Build mode map
-    all_names = sorted(set(chat_models + code_models))
-    chat_set = set(chat_models)
-    code_set = set(code_models)
-    model_modes = {}
-    for name in all_names:
-        modes = []
-        if name in chat_set: modes.append("chat")
-        if name in code_set: modes.append("code")
-        model_modes[name] = modes
-
-    # Save to disk
     save_cache(
         chat_models=chat_models,
         code_models=code_models,
@@ -323,7 +320,10 @@ async def arena_models_refresh(request: Request):
         model_modes=model_modes,
     )
 
-    return get_full_cache()
+    full = get_full_cache()
+    full["refresh_source"] = source
+    full["refresh_diagnostics"] = diagnostics
+    return full
 
 
 @router.get("/arena/health")
