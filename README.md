@@ -224,7 +224,28 @@ Provider shortcuts also work: `freehive-claude`, `freehive-chatgpt`, `freehive-g
 
 ---
 
-> **Quick Install:** For a ready-to-run desktop app, grab the latest build from the [Releases page](https://github.com/Nazzero/FreeHive/releases). Available for Linux (.deb, .rpm, .AppImage) — Windows and macOS builds coming soon.
+## Download & Install
+
+<p align="center">
+  <a href="https://github.com/Nazzero/FreeHive/releases/latest">
+    <img src="https://img.shields.io/badge/⬇_Download_FreeHive-v0.1.0-blue?style=for-the-badge&logo=github&logoColor=white" alt="Download FreeHive"/>
+  </a>
+</p>
+
+<p align="center">
+  <strong>For a quick and easy install, head to the <a href="https://github.com/Nazzero/FreeHive/releases/latest">Releases Page</a></strong><br/>
+  Pre-built desktop app — no setup required. Download, install, and run.
+</p>
+
+| Platform | Format | Status |
+|----------|--------|--------|
+| Linux (Debian/Ubuntu) | `.deb` | Available |
+| Linux (Fedora/RHEL) | `.rpm` | Available |
+| Linux (Universal) | `.AppImage` | Available |
+| Windows | `.exe` / `.msi` | Coming soon |
+| macOS | `.dmg` | Coming soon |
+
+---
 
 ## Quick Start
 
