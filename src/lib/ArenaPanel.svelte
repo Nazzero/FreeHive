@@ -19,7 +19,6 @@
     let chatCount = 0;
     let codeCount = 0;
     let searchCount = 0;
-    let imageCount = 0;
     let loginLoading = false;
     let loginMessage = '';
     let logoutLoading = false;
@@ -140,7 +139,6 @@
         chatCount = data.chat_count || 0;
         codeCount = data.code_count || 0;
         searchCount = data.search_count || 0;
-        imageCount = data.image_count || 0;
         if (models.length > 0) {
             syncModelsToStore(models);
         }
@@ -403,7 +401,7 @@
 
     // Search & filter state
     let searchQuery = '';
-    let activeFilter = 'all'; // 'all' | 'code' | 'search' | 'image'
+    let activeFilter = 'all'; // 'all' | 'code' | 'search'
     /** @type {string | null} */
     let expandedCard = null; // which family card is expanded
 
@@ -600,7 +598,6 @@
         // Capability filter
         if (activeFilter === 'code' && !modes.includes('code')) return false;
         if (activeFilter === 'search' && !modes.includes('search')) return false;
-        if (activeFilter === 'image' && !modes.includes('image')) return false;
         return true;
     });
 
@@ -646,7 +643,6 @@
     // Count models with each capability for filter badges
     $: codeFilterCount = arenaModelList.filter(m => (modelModes[m.id.replace('arena/', '')] || []).includes('code')).length;
     $: searchFilterCount = arenaModelList.filter(m => (modelModes[m.id.replace('arena/', '')] || []).includes('search')).length;
-    $: imageFilterCount = arenaModelList.filter(m => (modelModes[m.id.replace('arena/', '')] || []).includes('image')).length;
 </script>
 
 <div class="panel">
@@ -957,9 +953,6 @@
                         <button class="filter-pill {activeFilter === 'search' ? 'active' : ''}" on:click={() => activeFilter = activeFilter === 'search' ? 'all' : 'search'}>
                             <span class="tag tag-search">search</span> <span class="filter-count">{searchFilterCount}</span>
                         </button>
-                        <button class="filter-pill {activeFilter === 'image' ? 'active' : ''}" on:click={() => activeFilter = activeFilter === 'image' ? 'all' : 'image'}>
-                            <span class="tag tag-img">img</span> <span class="filter-count">{imageFilterCount}</span>
-                        </button>
                     </div>
                 </div>
 
@@ -1012,8 +1005,7 @@
                                         <span class="model-row-tags">
                                             {#if mModes.includes('code')}<span class="tag tag-code">code</span>{/if}
                                             {#if mCaps.includes('search')}<span class="tag tag-search">search</span>{/if}
-                                            {#if mCaps.includes('image-input')}<span class="tag tag-img">img</span>{/if}
-                                        </span>
+                                                                                    </span>
                                         {#if hl}
                                             <span class="health-dot" style="background: {hl.color}" title={hl.text}></span>
                                         {:else if probing && probeCurrent === m.id}
@@ -1074,8 +1066,7 @@
                                                 <span class="model-row-tags">
                                                     {#if mModes.includes('code')}<span class="tag tag-code">code</span>{/if}
                                                     {#if mCaps.includes('search')}<span class="tag tag-search">search</span>{/if}
-                                                    {#if mCaps.includes('image-input')}<span class="tag tag-img">img</span>{/if}
-                                                </span>
+                                                                                                    </span>
                                                 {#if hl}
                                                     <span class="health-dot" style="background: {hl.color}" title={hl.text}></span>
                                                 {:else if probing && probeCurrent === m.id}

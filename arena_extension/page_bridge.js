@@ -1101,56 +1101,42 @@
       const chatModels = [];
       const codeModels = [];
       const searchModels = [];
-      const imageModels = [];
-      /** @type {Object.<string, string[]>} */
-      const capMap = {};
       /** @type {Object.<string, string[]>} */
       const modelModes = {};
 
       for (const m of initialModels) {
         if (m.userSelectable !== true) continue;
-
-        // Hidden/admin/preview variants lack top-level `name`. Empirically
-        // this is the cleanest separator: ~165 models pass on the live page,
-        // matching arena's actual UI dropdown size exactly.
         if (!m.name || typeof m.name !== "string") continue;
 
         const name = modelPrimaryName(m);
         if (!name) continue;
 
-        // Modality detection — ALL tabs from arena selector.
-        // Arena uses these rankByModality keys: chat, webdev, image, search, video
+        // Modality detection — chat, code, search tabs from arena selector.
+        // Arena uses rankByModality keys: chat, webdev, search (+ image, video — excluded)
         const rbm = m.rankByModality || {};
         const isChat = Object.prototype.hasOwnProperty.call(rbm, "chat");
         const isCode = Object.prototype.hasOwnProperty.call(rbm, "webdev")
                     || Object.prototype.hasOwnProperty.call(rbm, "code");
         const isSearch = Object.prototype.hasOwnProperty.call(rbm, "search");
-        const isImage = Object.prototype.hasOwnProperty.call(rbm, "image");
 
-        // Must have at least one recognized modality
-        if (!isChat && !isCode && !isSearch && !isImage) continue;
+        if (!isChat && !isCode && !isSearch) continue;
 
-        // Capability filter — relaxed per modality:
-        // - chat/code: require text input + text or web output
-        // - search: require text input + search output
-        // - image: require text input (prompt) + image output
         const caps = m.capabilities || {};
         const ic = caps.inputCapabilities || {};
         const oc = caps.outputCapabilities || {};
         if (!ic.text) continue;
-        const hasValidOutput = oc.text || oc.web || oc.search || oc.image;
+        const hasValidOutput = oc.text || oc.web || oc.search;
         if (!hasValidOutput) continue;
 
         const modes = [];
         if (isChat)   { modes.push("chat");   chatModels.push(name); }
         if (isCode)   { modes.push("code");   codeModels.push(name); }
         if (isSearch) { modes.push("search"); searchModels.push(name); }
-        if (isImage)  { modes.push("image");  imageModels.push(name); }
         modelModes[name] = modes;
       }
 
       const allNames = Array.from(new Set([
-        ...chatModels, ...codeModels, ...searchModels, ...imageModels
+        ...chatModels, ...codeModels, ...searchModels
       ])).sort();
 
       emit("JOB_COMPLETE", {
@@ -1166,7 +1152,6 @@
             chat_models: chatModels.sort(),
             code_models: codeModels.sort(),
             search_models: searchModels.sort(),
-            image_models: imageModels.sort(),
             model_modes: modelModes,
             source: "hydration",
             diagnostics: {
@@ -1175,7 +1160,6 @@
               chat_count: chatModels.length,
               code_count: codeModels.length,
               search_count: searchModels.length,
-              image_count: imageModels.length,
             }
           }
         }
