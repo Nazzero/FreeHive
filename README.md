@@ -242,7 +242,7 @@ Provider shortcuts also work: `freehive-claude`, `freehive-chatgpt`, `freehive-g
 | Linux (Debian/Ubuntu) | `.deb` | Available |
 | Linux (Fedora/RHEL) | `.rpm` | Available |
 | Linux (Universal) | `.AppImage` | Available |
-| Windows | `.exe` / `.msi` | Coming soon |
+| Windows | `.exe` / `.msi` | Available |
 | macOS | `.dmg` | Coming soon |
 
 ---
