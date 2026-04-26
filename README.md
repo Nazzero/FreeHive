@@ -224,6 +224,8 @@ Provider shortcuts also work: `freehive-claude`, `freehive-chatgpt`, `freehive-g
 
 ---
 
+> **Quick Install:** For a ready-to-run desktop app, grab the latest build from the [Releases page](https://github.com/Nazzero/FreeHive/releases). Available for Linux (.deb, .rpm, .AppImage) — Windows and macOS builds coming soon.
+
 ## Quick Start
 
 ### 1. Clone & Install
