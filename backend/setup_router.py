@@ -145,7 +145,15 @@ def _get_binary_path(name: str) -> str | None:
 
 
 def _is_installed(name: str) -> bool:
-    return _get_binary_path(name) is not None
+    if _get_binary_path(name) is None:
+        return False
+    if name == "npm":
+        # On Windows, an orphan %APPDATA%\npm\npm.cmd shim survives after node
+        # is uninstalled or never activated by a node manager. The shim is
+        # non-functional without node — don't claim npm is installed unless
+        # node is too. (npm cannot run without node by definition.)
+        return _get_binary_path("node") is not None
+    return True
 
 
 # ── CLI detection cache ────────────────────────────────────────────────────
@@ -669,37 +677,100 @@ async def install_node():
             yield _sse({"status": "starting", "msg": "Detecting platform..."})
 
             if IS_WINDOWS:
-                yield _sse({"status": "output", "msg": "Windows detected — installing fnm (Fast Node Manager)..."})
+                # Step 1: install fnm via winget — but skip if already present.
+                # winget exits 0x8A15002B (APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE)
+                # when the package is already at the newest available version,
+                # which we treat as success — re-probe via PATH after the call.
+                if shutil.which("fnm", path=_refreshed_env().get("PATH")):
+                    yield _sse({"status": "output",
+                                "msg": "fnm already installed — skipping winget install."})
+                else:
+                    yield _sse({"status": "output",
+                                "msg": "Windows detected — installing fnm (Fast Node Manager)..."})
 
-                # Step 1: install fnm
-                rc = await _run_with_timeout(
-                    ["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                     "winget install Schniz.fnm --accept-package-agreements --accept-source-agreements"],
-                    timeout=120, stream_cb=collect,
-                )
-                for l in lines:
-                    yield _sse({"status": "output", "msg": l})
-                lines.clear()
+                    rc = await _run_with_timeout(
+                        ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                         "winget install Schniz.fnm --accept-package-agreements --accept-source-agreements"],
+                        timeout=120, stream_cb=collect,
+                    )
+                    for l in lines:
+                        yield _sse({"status": "output", "msg": l})
+                    lines.clear()
 
-                if rc == -1:
-                    yield _sse({"status": "done", "success": False,
-                                "msg": "fnm installation timed out. Check your network connection."})
-                    return
-                if rc != 0:
-                    yield _sse({"status": "done", "success": False,
-                                "msg": "fnm installation failed."})
-                    return
+                    if rc == -1:
+                        yield _sse({"status": "done", "success": False,
+                                    "msg": "fnm installation timed out. Check your network connection."})
+                        return
 
-                # Step 2: install Node LTS via fnm
-                # winget adds fnm to user PATH but current process doesn't see it
-                # Refresh PATH from registry then run fnm
+                    # Trust PATH over winget's exit code: a non-zero rc with fnm
+                    # actually present means "already installed, no upgrade".
+                    if not shutil.which("fnm", path=_refreshed_env().get("PATH")):
+                        yield _sse({"status": "done", "success": False,
+                                    "msg": "fnm installation failed."})
+                        return
+
+                # Step 2: install Node LTS via fnm, set as default, AND persist
+                # `$FNM_DIR\aliases\default` to user PATH. That junction is
+                # auto-maintained by `fnm default …` and contains both node.exe
+                # and npm.cmd, so a single PATH entry exposes node globally and
+                # auto-follows future fnm-default switches without re-running
+                # this code.
+                #
+                # WHY NOT `fnm current`?  In a non-shell-integrated subprocess
+                # (no `fnm env` applied), `fnm current` errors with
+                # "fnm env was not applied in this context" — useless for path
+                # discovery here. We use `fnm env --shell powershell` instead,
+                # which always emits FNM_DIR regardless of integration state.
+                #
+                # WHY NOT `%LOCALAPPDATA%\fnm`?  fnm picks Roaming AppData on
+                # some installs (its current default) and Local on others. The
+                # only reliable source is `fnm env`'s FNM_DIR.
                 yield _sse({"status": "output", "msg": "Installing Node.js LTS via fnm..."})
 
+                fnm_install_ps = r"""
+$ErrorActionPreference = 'Continue'
+$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
+
+fnm install --lts
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+fnm default lts-latest
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# Discover FNM_DIR via `fnm env` (single source of truth).
+$fnmDir = $null
+$envOut = (fnm env --shell powershell 2>$null) | Out-String
+if ($envOut -match '\$env:FNM_DIR\s*=\s*"([^"]+)"') { $fnmDir = $matches[1] }
+if (-not $fnmDir) {
+    foreach ($cand in @((Join-Path $env:APPDATA 'fnm'), (Join-Path $env:LOCALAPPDATA 'fnm'))) {
+        if (Test-Path (Join-Path $cand 'node-versions')) { $fnmDir = $cand; break }
+    }
+}
+if (-not $fnmDir) {
+    Write-Host 'WARN: could not determine FNM_DIR; node will not be persisted on PATH.'
+    exit 0
+}
+
+$nodeDir = Join-Path $fnmDir 'aliases\default'
+$nodeExe = Join-Path $nodeDir 'node.exe'
+if (-not (Test-Path $nodeExe)) {
+    Write-Host "ERROR: $nodeExe not found after fnm install — alias junction missing."
+    exit 1
+}
+
+$userPath = [Environment]::GetEnvironmentVariable('Path','User')
+$entries = if ($userPath) { $userPath -split ';' } else { @() }
+if ($entries -contains $nodeDir) {
+    Write-Host "$nodeDir already on user PATH."
+} else {
+    $newPath = if ($userPath) { "$userPath;$nodeDir" } else { $nodeDir }
+    [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+    Write-Host "Added $nodeDir to user PATH (fnm default-alias junction)."
+}
+"""
+
                 rc = await _run_with_timeout(
-                    ["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                     '$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + '
-                     '[System.Environment]::GetEnvironmentVariable("Path","User"); '
-                     'fnm install --lts; if ($LASTEXITCODE -eq 0) { fnm default lts-latest }'],
+                    ["powershell", "-NoProfile", "-NonInteractive", "-Command", fnm_install_ps],
                     timeout=180, stream_cb=collect,
                 )
                 for l in lines:
