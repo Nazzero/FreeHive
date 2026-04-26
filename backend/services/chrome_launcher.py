@@ -21,10 +21,23 @@ logger = logging.getLogger(__name__)
 
 # Extension dir — handle both dev and PyInstaller-bundled layouts
 if getattr(sys, "frozen", False):
-    # PyInstaller onedir: data lives under sys._MEIPASS
+    # PyInstaller onedir: data lives under sys._MEIPASS (temp dir).
+    # Chrome can't load unpacked from a temp dir that changes on restart,
+    # so copy to a stable location under the user's data directory.
     _BUNDLE_ROOT = Path(sys._MEIPASS)
     _PROJECT_ROOT = _BUNDLE_ROOT
-    EXTENSION_DIR = _BUNDLE_ROOT / "arena_extension"
+    _STABLE_EXT_DIR = Path.home() / ".freehive" / "extensions" / "arena"
+    _BUNDLED_EXT_DIR = _BUNDLE_ROOT / "arena_extension"
+    if _BUNDLED_EXT_DIR.exists():
+        try:
+            _STABLE_EXT_DIR.parent.mkdir(parents=True, exist_ok=True)
+            # Always sync from bundle to pick up updates
+            if _STABLE_EXT_DIR.exists():
+                shutil.rmtree(_STABLE_EXT_DIR)
+            shutil.copytree(_BUNDLED_EXT_DIR, _STABLE_EXT_DIR)
+        except Exception:
+            pass  # fall back to bundled dir
+    EXTENSION_DIR = _STABLE_EXT_DIR if _STABLE_EXT_DIR.exists() else _BUNDLED_EXT_DIR
 else:
     _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
     EXTENSION_DIR = _PROJECT_ROOT / "arena_extension"
