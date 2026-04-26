@@ -135,7 +135,7 @@ def detect_extension_id() -> str | None:
 
 
 def patch_native_host_manifest(extension_id: str) -> bool:
-    """Update the native host manifest with the correct extension ID."""
+    """Add extension_id to native host manifest alongside the Web Store ID."""
     manifest_path = _get_native_host_manifest_path()
     if not manifest_path or not manifest_path.exists():
         return False
@@ -144,17 +144,41 @@ def patch_native_host_manifest(extension_id: str) -> bool:
         with open(manifest_path, "r") as f:
             data = json.load(f)
         origin = f"chrome-extension://{extension_id}/"
-        if data.get("allowed_origins") == [origin]:
-            return True  # Already correct
-        data["allowed_origins"] = [origin]
+        known_origin = f"chrome-extension://{KNOWN_EXTENSION_ID}/"
+        desired = {known_origin, origin}
+        current = set(data.get("allowed_origins", []))
+        if desired == current:
+            return True
+        data["allowed_origins"] = sorted(desired)
         with open(manifest_path, "w") as f:
             json.dump(data, f, indent=2)
             f.write("\n")
-        logger.info("[ChromeLauncher] Patched native host manifest with ID: %s", extension_id)
+        logger.info("[ChromeLauncher] Patched native host manifest with IDs: %s", sorted(desired))
         return True
     except Exception as exc:
         logger.warning("[ChromeLauncher] Failed to patch manifest: %s", exc)
         return False
+
+
+def get_active_extension_ids() -> dict:
+    """Return which extension IDs are registered in the native host manifest."""
+    manifest_path = _get_native_host_manifest_path()
+    if not manifest_path or not manifest_path.exists():
+        return {"web_store_id": KNOWN_EXTENSION_ID, "unpacked_id": None, "allowed_origins": []}
+    try:
+        import json
+        with open(manifest_path, "r") as f:
+            data = json.load(f)
+        origins = data.get("allowed_origins", [])
+        ids = [o.replace("chrome-extension://", "").rstrip("/") for o in origins]
+        unpacked = None
+        for ext_id in ids:
+            if ext_id != KNOWN_EXTENSION_ID:
+                unpacked = ext_id
+                break
+        return {"web_store_id": KNOWN_EXTENSION_ID, "unpacked_id": unpacked, "allowed_origins": origins}
+    except Exception:
+        return {"web_store_id": KNOWN_EXTENSION_ID, "unpacked_id": None, "allowed_origins": []}
 
 
 def install_native_host() -> dict:
@@ -308,6 +332,7 @@ def get_chrome_status() -> dict:
     from backend.services.arena_bridge_transport import is_bridge_available
 
     chrome_binary = _find_chrome_binary()
+    ids = get_active_extension_ids()
     return {
         "chrome_installed": chrome_binary is not None,
         "chrome_path": chrome_binary,
@@ -316,4 +341,6 @@ def get_chrome_status() -> dict:
         "extension_path": str(EXTENSION_DIR.resolve()),
         "native_host_installed": _is_native_host_installed(),
         "bridge_connected": is_bridge_available(timeout_s=1.0),
+        "web_store_id": ids["web_store_id"],
+        "unpacked_id": ids["unpacked_id"],
     }

@@ -542,3 +542,22 @@ export async function openArenaExtensionFolder() {
     const res = await axios.post(`${BASE_URL}/arena/open-extension-folder`);
     return res.data;
 }
+
+/**
+ * Get registered extension IDs from native host manifest.
+ * @returns {Promise<{web_store_id: string, unpacked_id: string|null, allowed_origins: string[]}>}
+ */
+export async function getArenaExtensionIds() {
+    const res = await axios.get(`${BASE_URL}/arena/extension-ids`);
+    return res.data;
+}
+
+/**
+ * Register an unpacked extension ID in the native host manifest.
+ * @param {string} extensionId - 32 lowercase alpha characters
+ * @returns {Promise<{success: boolean, extension_id: string, message: string}>}
+ */
+export async function setArenaExtensionId(extensionId) {
+    const res = await axios.post(`${BASE_URL}/arena/set-extension-id`, { extension_id: extensionId });
+    return res.data;
+}

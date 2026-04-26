@@ -1,6 +1,6 @@
 <script>
     import { createEventDispatcher, onMount } from 'svelte';
-    import { getArenaStatus, getArenaModels, getArenaHealth, probeArenaModels, startArena, logoutArena, showArenaBrowser, setupArena, getArenaChromeStatus, refreshArenaModels, getArenaExtensionPath, openArenaExtensionFolder } from '$lib/api.js';
+    import { getArenaStatus, getArenaModels, getArenaHealth, probeArenaModels, startArena, logoutArena, showArenaBrowser, setupArena, getArenaChromeStatus, refreshArenaModels, getArenaExtensionPath, openArenaExtensionFolder, getArenaExtensionIds, setArenaExtensionId } from '$lib/api.js';
     import { availableModels, selectedModel } from '$lib/store.js';
 
     const dispatch = createEventDispatcher();
@@ -31,6 +31,11 @@
     let setupStep = 1;          // tracks which step user is on (1, 2, 3)
     let checkingConnection = false;
     let connectionMessage = '';
+    let installMode = 'unpacked';       // 'webstore' | 'unpacked'
+    let unpackedExtensionId = '';
+    let settingExtensionId = false;
+    let extensionIdMessage = '';
+    let registeredUnpackedId = null;
 
     // Probe state
     let probing = false;
@@ -54,10 +59,14 @@
     };
 
     onMount(async () => {
-        // Fetch extension path in parallel with status
+        // Fetch extension path + registered IDs in parallel with status
         getArenaExtensionPath().then((data) => {
             extensionPath = data?.path || '';
             extensionExists = data?.exists || false;
+        }).catch(() => {});
+        getArenaExtensionIds().then((data) => {
+            registeredUnpackedId = data?.unpacked_id || null;
+            if (registeredUnpackedId) unpackedExtensionId = registeredUnpackedId;
         }).catch(() => {});
         await fetchStatus();
         if (status?.bridge_active || status?.browser_available || status?.steel_available) {
@@ -306,6 +315,25 @@
             await openArenaExtensionFolder();
         } catch { /* non-fatal */ }
         finally { openFolderLoading = false; }
+    }
+
+    async function handleSetExtensionId() {
+        const id = unpackedExtensionId.trim().toLowerCase();
+        if (!id || id.length !== 32 || !/^[a-z]+$/.test(id)) {
+            extensionIdMessage = 'Invalid ID. Must be 32 lowercase letters (shown in chrome://extensions).';
+            return;
+        }
+        settingExtensionId = true;
+        extensionIdMessage = '';
+        try {
+            const result = await setArenaExtensionId(id);
+            registeredUnpackedId = result.unpacked_id || id;
+            extensionIdMessage = result.message || 'Extension ID registered.';
+        } catch (e) {
+            extensionIdMessage = e?.response?.data?.detail || e?.message || 'Failed to register extension ID.';
+        } finally {
+            settingExtensionId = false;
+        }
     }
 
     async function handleLogin() {
@@ -680,23 +708,25 @@
                 <div class="step-number {setupStep > 2 ? 'check' : ''}">{setupStep > 2 ? '\u2713' : '2'}</div>
                 <div class="step-body">
                     <h3>Install Extension</h3>
-                    <p>Install the FreeHive Arena Bridge extension in Chrome, then <strong>refresh the arena.ai tab</strong>.</p>
+                    <p>Choose install method, then <strong>refresh the arena.ai tab</strong>.</p>
                     {#if setupStep >= 2}
-                        <div class="ext-install-options">
-                            <a class="action-btn primary"
-                               href="https://chromewebstore.google.com/detail/freehive-arena-bridge/jkclihigpeefogblifghhpojgkbheked"
-                               target="_blank"
-                               rel="noopener noreferrer"
-                               style="display: inline-block; text-decoration: none;">
-                                Install from Chrome Web Store
-                            </a>
-                            <details class="manual-install-details">
-                                <summary>Manual install (if Chrome Web Store unavailable)</summary>
+                        <div class="install-mode-tabs">
+                            <button class="install-tab {installMode === 'unpacked' ? 'active' : ''}" on:click={() => installMode = 'unpacked'}>
+                                Load Unpacked
+                                <span class="tab-version">v1.0.1</span>
+                            </button>
+                            <button class="install-tab {installMode === 'webstore' ? 'active' : ''}" on:click={() => installMode = 'webstore'}>
+                                Chrome Web Store
+                                <span class="tab-version">v1.0.0</span>
+                            </button>
+                        </div>
+
+                        {#if installMode === 'unpacked'}
+                            <div class="install-panel">
                                 <ol class="install-steps">
                                     <li>Open <code class="inline-code">chrome://extensions</code> in Chrome</li>
                                     <li>Enable <strong>Developer mode</strong> (top-right toggle)</li>
-                                    <li>Click <strong>Load unpacked</strong></li>
-                                    <li>Select the extension folder:</li>
+                                    <li>Click <strong>Load unpacked</strong> and select the folder below:</li>
                                 </ol>
                                 {#if extensionPath}
                                     <div class="ext-path-box">
@@ -706,8 +736,37 @@
                                         </button>
                                     </div>
                                 {/if}
-                            </details>
-                        </div>
+                                <div class="ext-id-section">
+                                    <p class="hint">After loading, copy the <strong>extension ID</strong> from <code class="inline-code">chrome://extensions</code> and paste below:</p>
+                                    <div class="ext-id-input-row">
+                                        <input type="text" class="ext-id-input"
+                                            placeholder="32-character extension ID"
+                                            bind:value={unpackedExtensionId}
+                                            maxlength="32" />
+                                        <button class="action-btn primary" on:click={handleSetExtensionId}
+                                            disabled={settingExtensionId || !unpackedExtensionId.trim()}>
+                                            {settingExtensionId ? 'Saving...' : 'Register ID'}
+                                        </button>
+                                    </div>
+                                    {#if extensionIdMessage}
+                                        <div class="ext-id-message">{extensionIdMessage}</div>
+                                    {/if}
+                                    {#if registeredUnpackedId}
+                                        <p class="hint ext-id-registered">Registered: <code class="inline-code">{registeredUnpackedId}</code></p>
+                                    {/if}
+                                </div>
+                            </div>
+                        {:else}
+                            <div class="install-panel">
+                                <a class="action-btn primary"
+                                   href="https://chromewebstore.google.com/detail/freehive-arena-bridge/jkclihigpeefogblifghhpojgkbheked"
+                                   target="_blank" rel="noopener noreferrer"
+                                   style="display: inline-block; text-decoration: none;">
+                                    Install from Chrome Web Store
+                                </a>
+                                <p class="hint">Uses the published extension. No additional setup needed.</p>
+                            </div>
+                        {/if}
                         {#if setupStep === 2}
                             <button class="action-btn" on:click={() => setupStep = 3} style="margin-top: 8px;">
                                 Done — Next Step
@@ -778,7 +837,7 @@
         <div class="status-bar">
             <span class="status-dot"></span>
             <span class="status-text">Connected to Arena.ai</span>
-            <span class="status-badge">{status?.transport === 'extension' ? 'Extension Bridge' : 'CloakBrowser'}</span>
+            <span class="status-badge">{#if status?.transport === 'extension'}Extension Bridge {registeredUnpackedId ? '(Unpacked)' : '(Web Store)'}{:else}CloakBrowser{/if}</span>
         </div>
 
         <div class="account-bar">
@@ -1110,14 +1169,39 @@
     .code-block { display: flex; align-items: flex-start; gap: 8px; background: var(--bg-primary); border: 1px solid var(--border-medium); border-radius: 6px; padding: 10px 12px; }
     .code-block code { flex: 1; font-family: ui-monospace, Menlo, Monaco, monospace; font-size: 11.5px; color: var(--text-primary); word-break: break-all; white-space: pre-wrap; }
     .inline-code { font-family: ui-monospace, Menlo, Monaco, monospace; font-size: 12px; background: var(--bg-tertiary); padding: 1px 5px; border-radius: 3px; }
-    .ext-install-options { display: flex; flex-direction: column; gap: 8px; }
-    .manual-install-details { margin-top: 4px; }
-    .manual-install-details summary {
-        font-size: 12px; color: var(--text-muted); cursor: pointer;
-        padding: 4px 0; user-select: none;
+    .install-mode-tabs {
+        display: flex; gap: 0; border: 1px solid var(--border-medium);
+        border-radius: 8px; overflow: hidden; margin-bottom: 8px;
     }
-    .manual-install-details summary:hover { color: var(--text-secondary); }
-    .manual-install-details[open] summary { margin-bottom: 6px; }
+    .install-tab {
+        flex: 1; padding: 10px 12px; background: var(--bg-primary);
+        border: none; color: var(--text-secondary); font-size: 13px;
+        font-weight: 500; cursor: pointer; text-align: center;
+        transition: all 0.15s; display: flex; flex-direction: column;
+        align-items: center; gap: 2px;
+    }
+    .install-tab:first-child { border-right: 1px solid var(--border-medium); }
+    .install-tab:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+    .install-tab.active { background: var(--accent-muted, rgba(34,197,94,0.08)); color: var(--accent-color); font-weight: 600; }
+    .tab-version { font-size: 10px; color: var(--text-muted); font-family: ui-monospace, monospace; }
+    .install-tab.active .tab-version { color: var(--accent-color); opacity: 0.7; }
+    .install-panel { margin-top: 4px; }
+    .ext-id-section { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+    .ext-id-input-row { display: flex; gap: 8px; align-items: center; }
+    .ext-id-input {
+        flex: 1; background: var(--bg-primary); border: 1px solid var(--border-medium);
+        border-radius: 6px; padding: 8px 12px; font-size: 12px;
+        font-family: ui-monospace, Menlo, Monaco, monospace;
+        color: var(--text-primary); outline: none; transition: border-color 0.2s;
+    }
+    .ext-id-input:focus { border-color: var(--accent-color); }
+    .ext-id-input::placeholder { color: var(--text-muted); }
+    .ext-id-message {
+        font-size: 12px; padding: 6px 10px;
+        background: rgba(34, 197, 94, 0.08); border: 1px solid rgba(34, 197, 94, 0.2);
+        border-radius: 6px; color: #22c55e;
+    }
+    .ext-id-registered { margin-top: 0; }
     .install-steps {
         padding-left: 20px; margin: 6px 0; display: flex; flex-direction: column; gap: 4px;
         font-size: 13px; color: var(--text-secondary);

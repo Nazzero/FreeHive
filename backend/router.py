@@ -963,18 +963,27 @@ class SetExtensionIdRequest(BaseModel):
     extension_id: str
 
 
+@router.get("/arena/extension-ids")
+async def arena_extension_ids(request: Request):
+    """Return which extension IDs are registered in the native host manifest."""
+    _require_arena_enabled()
+    from backend.services.chrome_launcher import get_active_extension_ids
+    return get_active_extension_ids()
+
+
 @router.post("/arena/set-extension-id")
 async def arena_set_extension_id(body: SetExtensionIdRequest, request: Request):
-    """Manually set the extension ID in the native host manifest."""
+    """Register an unpacked extension ID alongside the Web Store ID."""
     _require_arena_enabled()
-    from backend.services.chrome_launcher import patch_native_host_manifest
+    from backend.services.chrome_launcher import patch_native_host_manifest, get_active_extension_ids
 
     ext_id = body.extension_id.strip()
     if not ext_id or len(ext_id) != 32 or not ext_id.isalpha():
         raise HTTPException(status_code=400, detail="Invalid extension ID. Must be 32 lowercase letters.")
     patched = patch_native_host_manifest(ext_id)
     if patched:
-        return {"success": True, "extension_id": ext_id, "message": "Native host manifest updated. Restart Chrome for changes to take effect."}
+        ids = get_active_extension_ids()
+        return {"success": True, "extension_id": ext_id, **ids, "message": "Extension ID registered. Restart Chrome for changes to take effect."}
     raise HTTPException(status_code=500, detail="Failed to update native host manifest.")
 
 
