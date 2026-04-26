@@ -1100,6 +1100,8 @@
 
       const chatModels = [];
       const codeModels = [];
+      const searchModels = [];
+      const imageModels = [];
       /** @type {Object.<string, string[]>} */
       const capMap = {};
       /** @type {Object.<string, string[]>} */
@@ -1108,57 +1110,48 @@
       for (const m of initialModels) {
         if (m.userSelectable !== true) continue;
 
-        // arena.ai's hydration JSON contains ~500 records but the actual
-        // user-facing dropdown only shows ~165. The hydration superset
-        // includes hidden/admin/preview variants (e.g., gpt-5.4-high,
-        // claude-opus-4-7-thinking) that have userSelectable=true but are
-        // filtered out of the actual dropdown by other client-side logic.
-        // Picking those models in FreeHive produces "Model not found"
-        // errors when the user tries to use them.
-        //
-        // Empirical separator: dropdown-visible models have ALL of
-        // top-level `name` (internal model id), top-level `rank`, and
-        // `organization` set; hidden variants are missing all three.
-        // Top-level `name` alone catches the dropdown set cleanly:
-        // 165 models on the live page vs 506 with userSelectable=true,
-        // matching arena's actual UI exactly.
+        // Hidden/admin/preview variants lack top-level `name`. Empirically
+        // this is the cleanest separator: ~165 models pass on the live page,
+        // matching arena's actual UI dropdown size exactly.
         if (!m.name || typeof m.name !== "string") continue;
 
         const name = modelPrimaryName(m);
         if (!name) continue;
 
+        // Modality detection — ALL tabs from arena selector.
+        // Arena uses these rankByModality keys: chat, webdev, image, search, video
         const rbm = m.rankByModality || {};
         const isChat = Object.prototype.hasOwnProperty.call(rbm, "chat");
-        // arena's modality key for code generation is `webdev`. Accept
-        // `code` too for forward-compat in case they ever rename it.
         const isCode = Object.prototype.hasOwnProperty.call(rbm, "webdev")
                     || Object.prototype.hasOwnProperty.call(rbm, "code");
-        if (!isChat && !isCode) continue;   // skip image/audio/video-only models
+        const isSearch = Object.prototype.hasOwnProperty.call(rbm, "search");
+        const isImage = Object.prototype.hasOwnProperty.call(rbm, "image");
 
-        // Require text input. Output side: accept either text (chat models)
-        // OR web (webdev/code models output code/HTML, not plain text).
-        // Live arena data confirms 55 webdev-only models lack `oc.text` but
-        // have `oc.web` — without this relaxation we'd lose every code-only
-        // model including gpt-5.3-codex, gpt-5.1-codex, KAT-Coder-Pro, etc.
+        // Must have at least one recognized modality
+        if (!isChat && !isCode && !isSearch && !isImage) continue;
+
+        // Capability filter — relaxed per modality:
+        // - chat/code: require text input + text or web output
+        // - search: require text input + search output
+        // - image: require text input (prompt) + image output
         const caps = m.capabilities || {};
         const ic = caps.inputCapabilities || {};
         const oc = caps.outputCapabilities || {};
         if (!ic.text) continue;
-        if (!oc.text && !oc.web) continue;
+        const hasValidOutput = oc.text || oc.web || oc.search || oc.image;
+        if (!hasValidOutput) continue;
 
         const modes = [];
-        if (isChat) { modes.push("chat"); chatModels.push(name); }
-        if (isCode) { modes.push("code"); codeModels.push(name); }
+        if (isChat)   { modes.push("chat");   chatModels.push(name); }
+        if (isCode)   { modes.push("code");   codeModels.push(name); }
+        if (isSearch) { modes.push("search"); searchModels.push(name); }
+        if (isImage)  { modes.push("image");  imageModels.push(name); }
         modelModes[name] = modes;
-
-        const features = [];
-        if (ic.image) features.push("image-input");
-        if (ic.file)  features.push("file-input");
-        if (oc.web)   features.push("search");   // model supports web search DURING chat
-        if (features.length > 0) capMap[name] = features;
       }
 
-      const allNames = Array.from(new Set([...chatModels, ...codeModels])).sort();
+      const allNames = Array.from(new Set([
+        ...chatModels, ...codeModels, ...searchModels, ...imageModels
+      ])).sort();
 
       emit("JOB_COMPLETE", {
         request_id: requestId,
@@ -1172,15 +1165,17 @@
             models: allNames,
             chat_models: chatModels.sort(),
             code_models: codeModels.sort(),
-            capabilities: capMap,
+            search_models: searchModels.sort(),
+            image_models: imageModels.sort(),
             model_modes: modelModes,
             source: "hydration",
-            // Diagnostic counts — let the backend log if numbers look off.
             diagnostics: {
               total_initial_models: initialModels.length,
               userSelectable_count: initialModels.filter(x => x && x.userSelectable === true).length,
               chat_count: chatModels.length,
               code_count: codeModels.length,
+              search_count: searchModels.length,
+              image_count: imageModels.length,
             }
           }
         }
