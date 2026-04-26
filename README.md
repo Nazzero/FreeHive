@@ -13,6 +13,10 @@
 </p>
 
 <p align="center">
+  <img src="Freehive_gif.gif" alt="FreeHive Demo" width="720"/>
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/version-0.6.0-blue?style=flat-square" alt="Version"/>
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License"/>
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat-square" alt="Platform"/>
@@ -372,6 +376,18 @@ curl -X POST http://localhost:7200/v1/chat/completions \
 - Model probe: test all 150+ models in one click
 - Provider card grid with search, filters, and capability tags
 
+> **⚠️ Arena.ai Note:** Models on Arena can be finicky — some may work reliably while others may not. We strongly recommend testing the models you plan to use on [Arena's website](https://lmarena.ai) first, then using FreeHive to confirm they work. Arena.ai is completely free to use, however we are constantly working to improve the integration and you should expect occasional issues.
+
+---
+
+## Known Issues & Fixes
+
+| Issue | Cause | Recommended Fix |
+|-------|-------|-----------------|
+| **IP rate limiting / low CAPTCHA score** | Rapidly switching between different Arena models | Avoid constantly switching models in quick succession. Pick a model and stick with it for your session. |
+| **Unexpected Arena errors mid-conversation** | Using multiple models in the same chat session | Give each model its own chat session. While Arena and FreeHive support multi-model conversations, isolating models to separate sessions reduces errors significantly. |
+| **Arena model not responding** | Model may be down or rate-limited on Arena's side | Test the model on [Arena's website](https://lmarena.ai) first. Use the Model Probe in FreeHive to check health status. |
+
 ---
 
 ## Architecture
@@ -508,12 +524,20 @@ FreeHive/
 
 ## Roadmap
 
-- [ ] True real-time streaming (currently buffers before chunking)
-- [ ] Token usage counting in API responses
-- [ ] Thinking UI toggle for Gemini and ChatGPT (backend ready)
-- [ ] ChatGPT token auto-refresh
-- [ ] Usage analytics dashboard
-- [ ] Tauri desktop packaging with sidecar
+### Update 1 — Message Encryption
+Encrypt messages from bash when sending to Arena. Sometimes file paths or sensitive information can be exposed in transit. FreeHive will automatically detect important data (secrets, credentials, paths) and encrypt it before sending.
+
+### Update 2 — Account Rotation & Proxy Switching
+Automated account monitoring, rotation, and switching across multiple free accounts. Includes proxy switching to improve quality and seamless operation of Arena.ai, reducing rate limits and downtime.
+
+### Update 3 — Paid Browser Automation
+Add support for paid browser services like BrowserBase (or similar) to automate Arena interactions. Reduces CAPTCHA issues, enables multiple account management, and handles rate limiting. Requires a paid subscription to the browser service.
+
+### Update 4 — Qwen Provider Integration
+Add Qwen Coder and Qwen Studio as direct providers using their OAuth. Full tool calling support, adding them to the provider list alongside Claude, ChatGPT, and Gemini.
+
+### Update 5 (Major) — Universal Browser Automation Router
+Browser automation across many different AI providers that offer web-UI chat interfaces. Create a universal API router that can connect to any web-based AI chat, turning any browser-accessible model into an API endpoint.
 
 ---
 
