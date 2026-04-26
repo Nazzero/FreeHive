@@ -283,7 +283,8 @@ async def arena_models_refresh(request: Request):
 
     chat_models: list[str] = []
     code_models: list[str] = []
-    all_caps: dict[str, list[str]] = {}
+    search_models: list[str] = []
+    image_models: list[str] = []
     model_modes: dict[str, list[str]] = {}
     diagnostics: dict = {}
     source = "unknown"
@@ -295,12 +296,13 @@ async def arena_models_refresh(request: Request):
             meta = update.get("metadata") or {}
             chat_models = list(meta.get("chat_models", []))
             code_models = list(meta.get("code_models", []))
-            all_caps = dict(meta.get("capabilities", {}))
+            search_models = list(meta.get("search_models", []))
+            image_models = list(meta.get("image_models", []))
             model_modes = dict(meta.get("model_modes", {}))
             source = str(meta.get("source", "unknown"))
             diagnostics = dict(meta.get("diagnostics") or {})
 
-    if not chat_models and not code_models:
+    if not chat_models and not code_models and not search_models and not image_models:
         # Bridge yielded nothing. Common causes: arena.ai tab still
         # hydrating, or extension lost its hooks after navigation. Surface
         # rather than silently caching empty data.
@@ -316,7 +318,8 @@ async def arena_models_refresh(request: Request):
     save_cache(
         chat_models=chat_models,
         code_models=code_models,
-        capabilities=all_caps,
+        search_models=search_models,
+        image_models=image_models,
         model_modes=model_modes,
     )
 
