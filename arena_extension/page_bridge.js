@@ -581,7 +581,8 @@
         const caps = model.capabilities || {};
         const inputCaps = caps.inputCapabilities || {};
         const outputCaps = caps.outputCapabilities || {};
-        if (!inputCaps.text || !outputCaps.text) continue;
+        if (!inputCaps.text) continue;
+        if (!outputCaps.text && !outputCaps.web) continue; // accept text or web output (webdev models)
         const rbm = model.rankByModality || {};
         const rankedModes = Object.keys(rbm);
         if (rankedModes.length > 0) {
