@@ -148,13 +148,23 @@ def detect_extension_id() -> str | None:
 
 
 def patch_native_host_manifest(extension_id: str) -> bool:
-    """Add extension_id to native host manifest alongside the Web Store ID."""
+    """Add extension_id to native host manifest alongside the Web Store ID.
+
+    On Windows the install_host_windows.ps1 script writes the manifest with
+    PowerShell's `Set-Content -Encoding UTF8`, which prepends a UTF-8 BOM
+    (bytes EF BB BF). Python's default text-mode read does NOT strip BOMs,
+    so json.load() failed at offset 0 with "Expecting value: line 1 column
+    1 (char 0)" — blocking every attempt to register an unpacked extension.
+    Using utf-8-sig on read auto-strips the BOM if present and is a no-op
+    if absent (Linux/macOS install scripts write without BOM). On write we
+    use plain utf-8 so future reads have nothing to strip.
+    """
     manifest_path = _get_native_host_manifest_path()
     if not manifest_path or not manifest_path.exists():
         return False
     try:
         import json
-        with open(manifest_path, "r") as f:
+        with open(manifest_path, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
         origin = f"chrome-extension://{extension_id}/"
         known_origin = f"chrome-extension://{KNOWN_EXTENSION_ID}/"
@@ -163,7 +173,7 @@ def patch_native_host_manifest(extension_id: str) -> bool:
         if desired == current:
             return True
         data["allowed_origins"] = sorted(desired)
-        with open(manifest_path, "w") as f:
+        with open(manifest_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
             f.write("\n")
         logger.info("[ChromeLauncher] Patched native host manifest with IDs: %s", sorted(desired))
@@ -180,7 +190,9 @@ def get_active_extension_ids() -> dict:
         return {"web_store_id": KNOWN_EXTENSION_ID, "unpacked_id": None, "allowed_origins": []}
     try:
         import json
-        with open(manifest_path, "r") as f:
+        # utf-8-sig strips a leading BOM on Windows; no-op elsewhere. See
+        # patch_native_host_manifest for why this matters.
+        with open(manifest_path, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
         origins = data.get("allowed_origins", [])
         ids = [o.replace("chrome-extension://", "").rstrip("/") for o in origins]
