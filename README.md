@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <img src="Freehive_gif.gif" alt="FreeHive Demo" width="720"/>
+  <img src="Freehivegif.gif" alt="FreeHive Demo" width="720"/>
 </p>
 
 <p align="center">
