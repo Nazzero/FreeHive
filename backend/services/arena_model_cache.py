@@ -40,7 +40,7 @@ def load_cache() -> dict[str, Any]:
     try:
         if CACHE_PATH.exists():
             data = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and data.get("version") == 2:
+            if isinstance(data, dict) and data.get("version") in (2, 3):
                 return data
     except Exception as exc:
         logger.debug("[ModelCache] Failed to load: %s", exc)
