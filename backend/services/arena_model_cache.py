@@ -52,20 +52,17 @@ def save_cache(
     code_models: list[str],
     model_modes: dict[str, list[str]],
     search_models: list[str] | None = None,
-    image_models: list[str] | None = None,
     capabilities: dict[str, list[str]] | None = None,
 ) -> None:
     """Save model catalog to disk."""
     search_models = search_models or []
-    image_models = image_models or []
-    all_models = sorted(set(chat_models + code_models + search_models + image_models))
+    all_models = sorted(set(chat_models + code_models + search_models))
     data = {
         "version": 3,
         "saved_at": time.time(),
         "chat_models": sorted(chat_models),
         "code_models": sorted(code_models),
         "search_models": sorted(search_models),
-        "image_models": sorted(image_models),
         "all_models": all_models,
         "capabilities": capabilities or {},
         "model_modes": model_modes,
@@ -76,8 +73,8 @@ def save_cache(
         tmp.write_text(json.dumps(data, ensure_ascii=True, indent=2), encoding="utf-8")
         tmp.replace(CACHE_PATH)
         logger.info(
-            "[ModelCache] Saved: %d chat, %d code, %d search, %d image, %d total",
-            len(chat_models), len(code_models), len(search_models), len(image_models), len(all_models),
+            "[ModelCache] Saved: %d chat, %d code, %d search, %d total",
+            len(chat_models), len(code_models), len(search_models), len(all_models),
         )
     except Exception as exc:
         logger.warning("[ModelCache] Failed to save: %s", exc)
@@ -129,20 +126,17 @@ def get_full_cache() -> dict[str, Any]:
     chat = _prefix_list(cache.get("chat_models", []))
     code = _prefix_list(cache.get("code_models", []))
     search = _prefix_list(cache.get("search_models", []))
-    image = _prefix_list(cache.get("image_models", []))
     all_m = _prefix_list(cache.get("all_models", []))
     return {
         "chat_models": chat,
         "code_models": code,
         "search_models": search,
-        "image_models": image,
         "all_models": all_m,
         "capabilities": cache.get("capabilities", {}),
         "model_modes": cache.get("model_modes", {}),
         "chat_count": len(chat),
         "code_count": len(code),
         "search_count": len(search),
-        "image_count": len(image),
         "total": len(all_m),
         "cached_at": cache.get("saved_at"),
         "cache_age_seconds": int(age) if age else None,
