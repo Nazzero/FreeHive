@@ -14,6 +14,7 @@ Strategy:
 
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -45,8 +46,10 @@ _DEFAULTS = {
         "version": "0.1.0",
     },
     "gemini": {
-        "client_id": "REDACTED_GOOGLE_CLIENT_ID",
-        "client_secret": "REDACTED_GOOGLE_CLIENT_SECRET",
+        # These are public OAuth credentials from Google's open-source Gemini CLI npm package.
+        # Read from env vars if available, otherwise fall back to values from the CLI bundle.
+        "client_id": os.environ.get("GEMINI_CLI_CLIENT_ID", ""),
+        "client_secret": os.environ.get("GEMINI_CLI_CLIENT_SECRET", ""),
         "version": "0.38.0",
         "endpoint_base": "https://cloudcode-pa.googleapis.com/v1internal",
     },
