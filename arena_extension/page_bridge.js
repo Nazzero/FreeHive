@@ -581,8 +581,7 @@
         const caps = model.capabilities || {};
         const inputCaps = caps.inputCapabilities || {};
         const outputCaps = caps.outputCapabilities || {};
-        if (!inputCaps.text) continue;
-        if (!outputCaps.text && !outputCaps.web) continue; // accept text or web output (webdev models)
+        if (!inputCaps.text || !outputCaps.text) continue;
         const rbm = model.rankByModality || {};
         const rankedModes = Object.keys(rbm);
         if (rankedModes.length > 0) {
@@ -1078,52 +1077,88 @@
       return;
     }
     if (operation === "fetch_all_models") {
-      // Fetch models from BOTH text/direct and code/direct dropdowns
-      const originalUrl = window.location.href;
-
-      // Read text/direct dropdown (current page or navigate to it)
-      if (!window.location.pathname.includes("/text/direct")) {
-        window.location.href = "https://arena.ai/text/direct";
-        await new Promise(r => setTimeout(r, 3000));
-      }
-      const chatModels = await getAvailableModelNames();
-
-      // Navigate to code/direct and read that dropdown
-      window.location.href = "https://arena.ai/code/direct";
-      await new Promise(r => setTimeout(r, 3000));
-      const codeModels = await getAvailableModelNames();
-
-      // Navigate back to text/direct
-      window.location.href = "https://arena.ai/text/direct";
-
-      // Build capability map
-      const capMap = {};
+      // Read the FULL arena model catalog from page hydration data.
+      //
+      // arena.ai ships its complete model list (every model on every page —
+      // /text/direct, /code/direct, /image/direct, etc.) in the page's
+      // initial JSON blob. Each model has a `rankByModality` object whose
+      // KEYS advertise which modes the model supports.  Probing the live
+      // page (build/probe_arena_parse.cjs) shows arena currently uses these
+      // modality keys: `chat`, `webdev`, `image`, `search`, `video`.
+      //
+      // IMPORTANT: arena calls the code-generation modality `webdev`, NOT
+      // `code`.  /code/direct in their UI filters models to those with the
+      // `webdev` modality.  We accept either spelling for forward-compat
+      // and export it as our internal "code" label so the rest of FreeHive
+      // doesn't need to know arena's vocabulary.
+      //
+      // Previous approach navigated /text/direct → /code/direct via
+      // window.location.href and read the dropdown after a 3 s sleep, which
+      // raced page hydration. The hydration-based read here is one-shot,
+      // requires no navigation, and is immune to that race.
       const initialModels = collectInitialModelsFromHtml();
+
+      const chatModels = [];
+      const codeModels = [];
+      /** @type {Object.<string, string[]>} */
+      const capMap = {};
+      /** @type {Object.<string, string[]>} */
+      const modelModes = {};
+
       for (const m of initialModels) {
+        if (m.userSelectable !== true) continue;
+
+        // arena.ai's hydration JSON contains ~500 records but the actual
+        // user-facing dropdown only shows ~165. The hydration superset
+        // includes hidden/admin/preview variants (e.g., gpt-5.4-high,
+        // claude-opus-4-7-thinking) that have userSelectable=true but are
+        // filtered out of the actual dropdown by other client-side logic.
+        // Picking those models in FreeHive produces "Model not found"
+        // errors when the user tries to use them.
+        //
+        // Empirical separator: dropdown-visible models have ALL of
+        // top-level `name` (internal model id), top-level `rank`, and
+        // `organization` set; hidden variants are missing all three.
+        // Top-level `name` alone catches the dropdown set cleanly:
+        // 165 models on the live page vs 506 with userSelectable=true,
+        // matching arena's actual UI exactly.
+        if (!m.name || typeof m.name !== "string") continue;
+
         const name = modelPrimaryName(m);
         if (!name) continue;
+
+        const rbm = m.rankByModality || {};
+        const isChat = Object.prototype.hasOwnProperty.call(rbm, "chat");
+        // arena's modality key for code generation is `webdev`. Accept
+        // `code` too for forward-compat in case they ever rename it.
+        const isCode = Object.prototype.hasOwnProperty.call(rbm, "webdev")
+                    || Object.prototype.hasOwnProperty.call(rbm, "code");
+        if (!isChat && !isCode) continue;   // skip image/audio/video-only models
+
+        // Require text input. Output side: accept either text (chat models)
+        // OR web (webdev/code models output code/HTML, not plain text).
+        // Live arena data confirms 55 webdev-only models lack `oc.text` but
+        // have `oc.web` — without this relaxation we'd lose every code-only
+        // model including gpt-5.3-codex, gpt-5.1-codex, KAT-Coder-Pro, etc.
         const caps = m.capabilities || {};
         const ic = caps.inputCapabilities || {};
         const oc = caps.outputCapabilities || {};
+        if (!ic.text) continue;
+        if (!oc.text && !oc.web) continue;
+
+        const modes = [];
+        if (isChat) { modes.push("chat"); chatModels.push(name); }
+        if (isCode) { modes.push("code"); codeModels.push(name); }
+        modelModes[name] = modes;
+
         const features = [];
         if (ic.image) features.push("image-input");
-        if (ic.file) features.push("file-input");
-        if (oc.web) features.push("search");
-        if (oc.code) features.push("code");
+        if (ic.file)  features.push("file-input");
+        if (oc.web)   features.push("search");   // model supports web search DURING chat
         if (features.length > 0) capMap[name] = features;
       }
 
-      // Merge: tag which modes each model supports
-      const allNames = new Set([...chatModels, ...codeModels]);
-      const chatSet = new Set(chatModels);
-      const codeSet = new Set(codeModels);
-      const modelModes = {};
-      for (const name of allNames) {
-        const modes = [];
-        if (chatSet.has(name)) modes.push("chat");
-        if (codeSet.has(name)) modes.push("code");
-        modelModes[name] = modes;
-      }
+      const allNames = Array.from(new Set([...chatModels, ...codeModels])).sort();
 
       emit("JOB_COMPLETE", {
         request_id: requestId,
@@ -1134,11 +1169,19 @@
           effective_model: null,
           raw_event_count: 0,
           metadata: {
-            models: Array.from(allNames).sort(),
-            chat_models: chatModels,
-            code_models: codeModels,
+            models: allNames,
+            chat_models: chatModels.sort(),
+            code_models: codeModels.sort(),
             capabilities: capMap,
             model_modes: modelModes,
+            source: "hydration",
+            // Diagnostic counts — let the backend log if numbers look off.
+            diagnostics: {
+              total_initial_models: initialModels.length,
+              userSelectable_count: initialModels.filter(x => x && x.userSelectable === true).length,
+              chat_count: chatModels.length,
+              code_count: codeModels.length,
+            }
           }
         }
       });
