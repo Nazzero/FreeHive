@@ -204,6 +204,12 @@ Supported: Claude (all models), Gemini (2.5+, 3.x), ChatGPT (o-series, gpt-5.3+)
 
 On startup and after authentication, FreeHive queries each provider for their current model catalog. No hardcoded model lists — you always see what's actually available to your account.
 
+### API Keys
+
+<p align="center">
+  <img src="API_Section.png" alt="FreeHive API Keys Page" width="720"/>
+</p>
+
 ### Smart API Key Routing
 
 Your API key determines the model — no need to configure model names in your tools:
@@ -328,6 +334,10 @@ response = client.chat.completions.create(
 ```
 
 ### OpenCode
+
+<p align="center">
+  <img src="opencode_conn.png" alt="OpenCode connected to FreeHive" width="720"/>
+</p>
 
 One-click: go to **Settings > API Keys > Add to OpenCode** in the FreeHive UI.
 
@@ -510,6 +520,12 @@ FreeHive/
 | Linux AppImage errors | Use `--bundles deb,rpm` instead |
 
 ---
+
+### Usage Dashboard
+
+<p align="center">
+  <img src="Usage.png" alt="FreeHive Usage Page" width="720"/>
+</p>
 
 ## Rate Limits (Free Tiers)
 
