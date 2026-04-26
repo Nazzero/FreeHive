@@ -142,7 +142,12 @@
         for (const [prov, data] of Object.entries($availableModels)) {
             if (!opencodeProviderOn.hasOwnProperty(prov)) {
                 opencodeProviderOn[prov] = prov !== 'arena';
-                opencodeSelected[prov] = new Set((data.models || []).map((/** @type {any} */ m) => m.id));
+                // Non-arena providers start fully selected; arena starts empty so user picks
+                if (prov !== 'arena') {
+                    opencodeSelected[prov] = new Set((data.models || []).map((/** @type {any} */ m) => m.id));
+                } else {
+                    opencodeSelected[prov] = new Set();
+                }
             }
         }
         if (Object.keys(opencodeProviderOn).length > 0) opencodeInitDone = true;
@@ -150,15 +155,14 @@
 
     /** @param {string} prov */
     function ocToggleProvider(prov) {
-        opencodeProviderOn = { ...opencodeProviderOn, [prov]: !opencodeProviderOn[prov] };
-        if (!opencodeProviderOn[prov]) {
+        const wasOn = opencodeProviderOn[prov] ?? false;
+        opencodeProviderOn = { ...opencodeProviderOn, [prov]: !wasOn };
+        if (wasOn) {
+            // Closing: clear selections
             opencodeSelected[prov] = new Set();
             opencodeSelected = { ...opencodeSelected };
-        } else {
-            const models = $availableModels[prov]?.models || [];
-            opencodeSelected[prov] = new Set(models.map((/** @type {any} */ m) => m.id));
-            opencodeSelected = { ...opencodeSelected };
         }
+        // Opening: keep current selection (empty by default), user picks via All or individual checkboxes
     }
 
     /**
@@ -169,9 +173,7 @@
         const s = new Set(opencodeSelected[prov] || []);
         if (s.has(modelId)) s.delete(modelId); else s.add(modelId);
         opencodeSelected = { ...opencodeSelected, [prov]: s };
-        // Update provider toggle
-        const total = ($availableModels[prov]?.models || []).length;
-        opencodeProviderOn = { ...opencodeProviderOn, [prov]: s.size > 0 };
+        // Don't auto-close provider when 0 selected — user may still be picking
     }
 
     /** @param {string} prov @param {boolean} all */
@@ -183,7 +185,7 @@
             opencodeSelected[prov] = new Set();
         }
         opencodeSelected = { ...opencodeSelected };
-        opencodeProviderOn = { ...opencodeProviderOn, [prov]: all };
+        // Keep provider list open — "None" just deselects, doesn't collapse
     }
 
     $: ocTotalSelected = Object.entries(opencodeSelected)
