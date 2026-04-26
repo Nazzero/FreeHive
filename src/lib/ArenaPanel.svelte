@@ -18,6 +18,8 @@
     let modelModes = {};
     let chatCount = 0;
     let codeCount = 0;
+    let searchCount = 0;
+    let imageCount = 0;
     let loginLoading = false;
     let loginMessage = '';
     let logoutLoading = false;
@@ -137,6 +139,8 @@
         modelModes = data.model_modes || {};
         chatCount = data.chat_count || 0;
         codeCount = data.code_count || 0;
+        searchCount = data.search_count || 0;
+        imageCount = data.image_count || 0;
         if (models.length > 0) {
             syncModelsToStore(models);
         }
@@ -595,8 +599,8 @@
         }
         // Capability filter
         if (activeFilter === 'code' && !modes.includes('code')) return false;
-        if (activeFilter === 'search' && !caps.includes('search')) return false;
-        if (activeFilter === 'image' && !caps.includes('image-input')) return false;
+        if (activeFilter === 'search' && !modes.includes('search')) return false;
+        if (activeFilter === 'image' && !modes.includes('image')) return false;
         return true;
     });
 
@@ -641,8 +645,8 @@
 
     // Count models with each capability for filter badges
     $: codeFilterCount = arenaModelList.filter(m => (modelModes[m.id.replace('arena/', '')] || []).includes('code')).length;
-    $: searchFilterCount = arenaModelList.filter(m => (modelCapabilities[m.id.replace('arena/', '')] || []).includes('search')).length;
-    $: imageFilterCount = arenaModelList.filter(m => (modelCapabilities[m.id.replace('arena/', '')] || []).includes('image-input')).length;
+    $: searchFilterCount = arenaModelList.filter(m => (modelModes[m.id.replace('arena/', '')] || []).includes('search')).length;
+    $: imageFilterCount = arenaModelList.filter(m => (modelModes[m.id.replace('arena/', '')] || []).includes('image')).length;
 </script>
 
 <div class="panel">
