@@ -1209,10 +1209,18 @@ async def get_arena_steel_status(request: Request):
 
         # Extension bridge: user's Chrome handles auth
         if bridge_active:
+            # Include registered extension IDs so frontend knows which type is active
+            extension_ids = {}
+            try:
+                from backend.services.chrome_launcher import get_active_extension_ids
+                extension_ids = get_active_extension_ids()
+            except Exception:
+                pass
             return {
                 "steel_available": True, "browser_available": True,
                 "bridge_active": True, "transport": "extension",
                 "authenticated": True, "account": None, "viewer_url": None,
+                "extension_ids": extension_ids,
             }
 
         # CloakBrowser fallback

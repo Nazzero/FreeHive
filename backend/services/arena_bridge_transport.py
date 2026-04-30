@@ -57,7 +57,8 @@ def describe_bridge_endpoint() -> str:
     return f"unix://{get_bridge_socket_path()}"
 
 
-def is_bridge_available(timeout_s: float = 0.15) -> bool:
+def is_bridge_available(timeout_s: float = 0.5) -> bool:
+    """Check if bridge is actually listening (not just file exists)."""
     transport = get_bridge_transport()
     if transport == "tcp":
         try:
@@ -65,4 +66,15 @@ def is_bridge_available(timeout_s: float = 0.15) -> bool:
                 return True
         except OSError:
             return False
-    return os.path.exists(get_bridge_socket_path())
+    # Unix socket: actually connect instead of just checking file exists
+    sock_path = get_bridge_socket_path()
+    if not os.path.exists(sock_path):
+        return False
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(timeout_s)
+        sock.connect(sock_path)
+        sock.close()
+        return True
+    except OSError:
+        return False

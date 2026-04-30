@@ -271,7 +271,7 @@
         connectionMessage = 'Checking connection...';
         error = '';
         let attempts = 0;
-        const maxAttempts = 20;
+        const maxAttempts = 10;
         const check = async () => {
             attempts++;
             try {
@@ -288,7 +288,6 @@
                 connectionMessage = `Checking... (${attempts}/${maxAttempts})`;
                 setTimeout(check, 2000);
             } else {
-                // Fetch diagnostics to show what's missing
                 checkingConnection = false;
                 connectionMessage = '';
                 try {
@@ -297,7 +296,19 @@
                     if (!cs.chrome_installed) issues.push('Chrome is not installed');
                     if (!cs.native_host_installed) issues.push('Native host not installed — click "Open Arena.ai" in Step 1 to install it');
                     if (!cs.extension_dir_exists) issues.push('Extension files not found');
-                    if (!cs.bridge_connected) issues.push('Extension bridge not responding — refresh the arena.ai tab in Chrome');
+                    if (!cs.bridge_connected) {
+                        if (installMode === 'unpacked' && registeredUnpackedId) {
+                            issues.push(`Extension bridge not responding — make sure your unpacked extension (ID: ${registeredUnpackedId}) is enabled in chrome://extensions and the arena.ai tab is open`);
+                        } else if (installMode === 'webstore') {
+                            issues.push('Extension bridge not responding — make sure the FreeHive Arena Bridge extension is installed from the Chrome Web Store and the arena.ai tab is open');
+                        } else {
+                            issues.push('Extension bridge not responding — refresh the arena.ai tab in Chrome');
+                        }
+                    }
+                    // Check if unpacked extension ID is registered when using unpacked mode
+                    if (installMode === 'unpacked' && !registeredUnpackedId && cs.native_host_installed) {
+                        issues.push('Unpacked extension ID not registered — paste your 32-character extension ID above and click "Register ID"');
+                    }
                     if (issues.length > 0) {
                         error = 'Connection check failed:\n' + issues.map((s, i) => `${i + 1}. ${s}`).join('\n');
                     } else {
