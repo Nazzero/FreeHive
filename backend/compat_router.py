@@ -136,6 +136,7 @@ def _adapter_for_model_id(model_id: str):
         build_claude_cascade,
         build_chatgpt_cascade,
         build_gemini_cascade,
+        build_qwen_cascade,
     )
 
     m = model_id.lower()
@@ -155,6 +156,9 @@ def _adapter_for_model_id(model_id: str):
     if m == "gemini" or m.startswith("gemini-"):
         model = None if m == "gemini" else model_id
         return build_gemini_cascade(model=model), "gemini"
+    if m == "qwen" or m.startswith("qwen"):
+        model = None if m == "qwen" else model_id
+        return build_qwen_cascade(model=model), "qwen"
     # Unknown model — default to claude cascade
     return build_claude_cascade(), "claude"
 
@@ -168,6 +172,8 @@ def _model_matches_provider(model: str, provider: str) -> bool:
         return any(m.startswith(p) for p in ("gpt-", "o1-", "o3-", "o4-", "codex-", "chatgpt"))
     if provider == "gemini":
         return m.startswith("gemini-")
+    if provider == "qwen":
+        return m.startswith("qwen")
     if provider == "arena":
         return m.startswith("arena/") or m.startswith("arena-")
     return False
@@ -191,7 +197,7 @@ def _adapter_for_request(api_key: str, model: str):
     # freehive-[model-id] format: strip prefix and use remainder as exact model ID
     if key.lower().startswith("freehive-"):
         key_model = key[len("freehive-"):]  # e.g. "claude-haiku-4-5" or "gpt-5.4"
-        if key_model and key_model not in ("claude", "chatgpt", "gemini", "arena"):
+        if key_model and key_model not in ("claude", "chatgpt", "gemini", "qwen", "arena"):
             # Specific model key — ignore the model field in the request body
             return _adapter_for_model_id(key_model)
         # Legacy 3-key shortcuts — honour the model from the request body if it
@@ -225,7 +231,7 @@ def _check_auth(request: Request) -> str:
         raise HTTPException(
             status_code=401,
             detail="Missing API key. Use x-api-key or Authorization: Bearer <key>. "
-                   "Provider keys: freehive-claude, freehive-chatgpt, freehive-gemini",
+                   "Provider keys: freehive-claude, freehive-chatgpt, freehive-gemini, freehive-qwen",
         )
     return api_key
 
@@ -1131,6 +1137,45 @@ async def openai_chat_completions(body: OpenAIRequest, request: Request):
                 _openai_sse_from_response(result),
                 media_type="text/event-stream",
             )
+        _persist_compat_conversation(
+            request,
+            provider=provider,
+            model=resolved_model,
+            endpoint="/v1/chat/completions",
+            incoming_messages=body.messages,
+            response_obj=result,
+        )
+        return result
+
+    # Qwen: OpenAI-compatible — real SSE streaming via chat.qwen.ai
+    if provider == "qwen" and hasattr(adapter, "stream_chat"):
+        if body.stream:
+            async def _qwen_stream():
+                try:
+                    async for chunk in adapter.stream_chat(
+                        body.messages,
+                        tools=body.tools,
+                        temperature=body.temperature,
+                        max_tokens=body.max_tokens,
+                    ):
+                        yield f"data: {json.dumps(chunk)}\n\n"
+                    yield "data: [DONE]\n\n"
+                except Exception as exc:
+                    logger.exception("[compat/completions/qwen] Stream error")
+                    err = {"error": {"message": str(exc), "type": "server_error"}}
+                    yield f"data: {json.dumps(err)}\n\n"
+            return StreamingResponse(_qwen_stream(), media_type="text/event-stream")
+
+        # Non-streaming: use regular call
+        try:
+            result = await adapter._call_api(
+                body.messages,
+                tools=body.tools,
+                temperature=body.temperature,
+                max_tokens=body.max_tokens,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
         _persist_compat_conversation(
             request,
             provider=provider,

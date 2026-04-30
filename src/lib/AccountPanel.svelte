@@ -1,6 +1,6 @@
 <script>
     import { createEventDispatcher, onMount } from 'svelte';
-    import { installTool, authenticateTool, getSetupStatus, logoutTool } from '$lib/api.js';
+    import { installTool, authenticateTool, getSetupStatus, logoutTool, saveQwenToken, logoutQwen } from '$lib/api.js';
 
     const dispatch = createEventDispatcher();
 
@@ -12,6 +12,8 @@
     let busyLogoutTool = '';
     let busyLoginTool = '';
     let busyInstallTool = '';
+    let qwenLoggingIn = false;
+    let qwenLoginWindow = null;
     let loginProgress = '';
     let installProgress = '';
     let loginElapsed = 0;
@@ -148,7 +150,112 @@
         if (id === 'claude') return '/logos/claude.png';
         if (id === 'chatgpt') return '/logos/chatgpt.png';
         if (id === 'gemini') return '/logos/gemini.png';
+        if (id === 'qwen') return '/logos/qwen.png';
         return '';
+    }
+
+    // ------------------------------------------------------------------
+    // Qwen browser login flow
+    // ------------------------------------------------------------------
+    async function handleQwenLogin() {
+        qwenLoggingIn = true;
+        error = '';
+        success = '';
+
+        // Open chat.qwen.ai in popup — user logs in via Google/GitHub
+        const w = 500, h = 700;
+        const left = (screen.width - w) / 2;
+        const top = (screen.height - h) / 2;
+        qwenLoginWindow = window.open(
+            'https://chat.qwen.ai/',
+            'qwen_login',
+            `width=${w},height=${h},left=${left},top=${top},toolbar=no,menubar=no`
+        );
+
+        // Poll for token in the popup's cookies/localStorage
+        const pollInterval = setInterval(async () => {
+            try {
+                if (!qwenLoginWindow || qwenLoginWindow.closed) {
+                    clearInterval(pollInterval);
+                    qwenLoggingIn = false;
+                    // Check if auth succeeded
+                    await fetchStatus({ silent: true });
+                    const q = status?.qwen;
+                    if (q?.authenticated) {
+                        success = 'Qwen login complete.';
+                        dispatch('modelsChanged');
+                    }
+                    return;
+                }
+                // Try to read token from popup
+                const popupUrl = qwenLoginWindow.location?.href || '';
+                if (popupUrl.includes('chat.qwen.ai') && !popupUrl.includes('/auth')) {
+                    // User is logged in — try to extract token from cookies
+                    // The popup should have set auth cookies/JWT
+                    try {
+                        const doc = qwenLoginWindow.document;
+                        // Look for token in localStorage
+                        const stored = qwenLoginWindow.localStorage?.getItem('token');
+                        if (stored) {
+                            await saveQwenToken(stored);
+                            clearInterval(pollInterval);
+                            qwenLoginWindow.close();
+                            qwenLoggingIn = false;
+                            success = 'Qwen login complete.';
+                            await fetchStatus({ silent: true });
+                            dispatch('modelsChanged');
+                            return;
+                        }
+                    } catch { /* cross-origin — expected before login completes */ }
+                }
+            } catch { /* cross-origin errors during login */ }
+        }, 2000);
+
+        // Timeout after 2 minutes
+        setTimeout(() => {
+            clearInterval(pollInterval);
+            if (qwenLoggingIn) {
+                qwenLoggingIn = false;
+                error = 'Qwen login timed out. If you logged in, paste your token manually below.';
+            }
+        }, 120000);
+    }
+
+    async function handleQwenLogout() {
+        busyLogoutTool = 'qwen';
+        error = '';
+        success = '';
+        try {
+            await logoutQwen();
+            success = 'Qwen logged out.';
+            await fetchStatus({ silent: true });
+            dispatch('modelsChanged');
+        } catch (e) {
+            error = /** @type {any} */ (e)?.message || 'Failed to log out Qwen.';
+        } finally {
+            busyLogoutTool = '';
+        }
+    }
+
+    /** @type {string} */
+    let qwenManualToken = '';
+    async function handleQwenManualToken() {
+        if (!qwenManualToken.trim()) return;
+        error = '';
+        success = '';
+        try {
+            const result = await saveQwenToken(qwenManualToken.trim());
+            if (result?.success) {
+                success = 'Qwen token saved.';
+                qwenManualToken = '';
+                await fetchStatus({ silent: true });
+                dispatch('modelsChanged');
+            } else {
+                error = result?.error || 'Failed to save token.';
+            }
+        } catch (e) {
+            error = /** @type {any} */ (e)?.message || 'Failed to save Qwen token.';
+        }
     }
 
     /**
@@ -406,9 +513,67 @@
                     {/if}
                 </div>
             {/each}
+
+            <!-- Qwen — browser-based login (separate from CLI providers) -->
+            {@const qwenStatus = status?.qwen || {}}
+            <div class="provider-card {qwenStatus.authenticated ? 'connected' : ''}">
+                <div class="provider-icon">
+                    <img src="/logos/qwen.png" alt="Qwen logo" />
+                </div>
+                <div class="provider-main">
+                    <div class="provider-title">
+                        <h3>Qwen</h3>
+                        <span class="badge {qwenStatus.authenticated ? 'active' : 'inactive'}">
+                            {qwenStatus.authenticated ? 'Active' : 'Disconnected'}
+                        </span>
+                    </div>
+                    <p class="provider-detail">
+                        {#if qwenStatus.authenticated}
+                            Connected{qwenStatus.account_label ? ` as ${qwenStatus.account_label}` : ''} via chat.qwen.ai
+                        {:else}
+                            Login via Google or GitHub on chat.qwen.ai (free)
+                        {/if}
+                    </p>
+                </div>
+
+                {#if qwenStatus.authenticated}
+                    <button
+                        class="action-btn danger"
+                        on:click={handleQwenLogout}
+                        disabled={busyLogoutTool === 'qwen'}
+                    >
+                        {busyLogoutTool === 'qwen' ? 'Logging out...' : 'Logout'}
+                    </button>
+                {:else}
+                    <button
+                        class="action-btn"
+                        on:click={handleQwenLogin}
+                        disabled={qwenLoggingIn}
+                    >
+                        {qwenLoggingIn ? 'Waiting for login...' : 'Login to Qwen'}
+                    </button>
+                {/if}
+            </div>
+
+            {#if !qwenStatus.authenticated}
+                <div class="qwen-manual-token">
+                    <p class="hint">Or paste your chat.qwen.ai JWT token manually:</p>
+                    <div class="token-input-row">
+                        <input
+                            type="password"
+                            class="token-input"
+                            placeholder="Paste JWT token from browser"
+                            bind:value={qwenManualToken}
+                        />
+                        <button class="action-btn" on:click={handleQwenManualToken} disabled={!qwenManualToken.trim()}>
+                            Save Token
+                        </button>
+                    </div>
+                </div>
+            {/if}
         </div>
 
-        <p class="hint">Logins run directly from this page. If a CLI is missing, the button opens Setup.</p>
+        <p class="hint">CLI providers login directly from this page. Qwen uses browser login on chat.qwen.ai.</p>
     {/if}
 </div>
 
@@ -686,5 +851,30 @@
         font-size: 12px;
         color: var(--text-muted);
         margin-top: 4px;
+    }
+
+    .qwen-manual-token {
+        padding: 0 18px 12px;
+    }
+
+    .token-input-row {
+        display: flex;
+        gap: 8px;
+        margin-top: 6px;
+    }
+
+    .token-input {
+        flex: 1;
+        padding: 8px 12px;
+        background: var(--bg-primary);
+        border: 1px solid var(--border-medium);
+        border-radius: 8px;
+        color: var(--text-primary);
+        font-size: 13px;
+        font-family: monospace;
+    }
+
+    .token-input::placeholder {
+        color: var(--text-muted);
     }
 </style>

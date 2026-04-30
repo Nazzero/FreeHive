@@ -561,3 +561,24 @@ export async function setArenaExtensionId(extensionId) {
     const res = await axios.post(`${BASE_URL}/arena/set-extension-id`, { extension_id: extensionId });
     return res.data;
 }
+
+// ---------------------------------------------------------------------------
+// Qwen
+// ---------------------------------------------------------------------------
+
+export async function getQwenStatus() {
+    const res = await axios.get(`${BASE_URL}/setup/qwen/status`);
+    return res.data;
+}
+
+export async function saveQwenToken(token, expiresAt = 0, email = null, name = null) {
+    const res = await axios.post(`${BASE_URL}/setup/qwen/token`, {
+        token, expires_at: expiresAt, email, name,
+    });
+    return res.data;
+}
+
+export async function logoutQwen() {
+    const res = await axios.post(`${BASE_URL}/setup/qwen/logout`);
+    return res.data;
+}
