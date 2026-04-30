@@ -320,6 +320,35 @@ def _read_chatgpt_auth_status() -> dict:
         }
 
 
+def _read_qwen_auth_status() -> dict:
+    """Check Qwen authentication status from saved session."""
+    try:
+        from backend.adapters.qwen_direct_adapter import QwenDirectAdapter, SESSION_FILE
+        if not SESSION_FILE.exists():
+            return {"authenticated": False, "account_email": None, "account_name": None, "account_label": None}
+        data = json.loads(SESSION_FILE.read_text())
+        token = data.get("token", "")
+        if not token:
+            return {"authenticated": False, "account_email": None, "account_name": None, "account_label": None}
+        expires_at = data.get("expires_at", 0)
+        expired = expires_at and time.time() >= expires_at
+        email = data.get("email")
+        name = data.get("name")
+        # Try decode JWT for user info
+        if not email and token:
+            payload = _decode_jwt_payload(token)
+            email = payload.get("email")
+            name = name or payload.get("name")
+        return {
+            "authenticated": not expired,
+            "account_email": email,
+            "account_name": name,
+            "account_label": email or name or "Qwen User",
+        }
+    except Exception:
+        return {"authenticated": False, "account_email": None, "account_name": None, "account_label": None}
+
+
 # ---------------------------------------------------------------------------
 # Config helpers
 # ---------------------------------------------------------------------------
@@ -438,12 +467,14 @@ async def get_setup_status():
             pass
 
     chatgpt_auth = _read_chatgpt_auth_status()
+    qwen_auth = _read_qwen_auth_status()
     authed = auth["authenticated"]
     selected_tool = _get_selected_tool()
 
     gemini_ready = gemini_auth["authenticated"] and not gemini_auth["expired"]
     chatgpt_ready = chatgpt_auth["authenticated"]
-    any_provider_ready = authed or gemini_ready or chatgpt_ready
+    qwen_ready = qwen_auth["authenticated"]
+    any_provider_ready = authed or gemini_ready or chatgpt_ready or qwen_ready
 
     # Arena status (extension bridge or CloakBrowser)
     browser_available = False
@@ -491,6 +522,12 @@ async def get_setup_status():
             "account_email": chatgpt_auth["account_email"],
             "account_name": chatgpt_auth["account_name"],
             "account_label": chatgpt_auth["account_label"],
+        },
+        "qwen": {
+            "authenticated": qwen_auth["authenticated"],
+            "account_email": qwen_auth.get("account_email"),
+            "account_name": qwen_auth.get("account_name"),
+            "account_label": qwen_auth.get("account_label"),
         },
         "selected_tool": selected_tool,
         "ready": any_provider_ready,
@@ -1306,6 +1343,60 @@ async def _run_model_discovery():
     except Exception as exc:
         import logging
         logging.getLogger(__name__).warning("Model discovery after auth failed: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Qwen auth endpoints
+# ---------------------------------------------------------------------------
+
+@setup_router.post("/setup/qwen/token")
+async def save_qwen_token(request: Request):
+    """Save Qwen JWT token from browser login."""
+    try:
+        body = await request.json()
+        token = body.get("token", "").strip()
+        if not token:
+            return {"success": False, "error": "No token provided"}
+        expires_at = body.get("expires_at", 0)
+        email = body.get("email")
+        name = body.get("name")
+
+        from backend.adapters.qwen_direct_adapter import QwenDirectAdapter
+        QwenDirectAdapter.save_session(
+            token=token,
+            expires_at=expires_at,
+            email=email,
+            name=name,
+        )
+
+        # Trigger model discovery
+        try:
+            from backend.model_discovery import discover_qwen_models
+            await discover_qwen_models()
+        except Exception:
+            pass
+
+        return {"success": True, "message": "Qwen session saved"}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+@setup_router.get("/setup/qwen/status")
+async def get_qwen_status():
+    """Check Qwen authentication status."""
+    return _read_qwen_auth_status()
+
+
+@setup_router.post("/setup/qwen/logout")
+async def qwen_logout():
+    """Clear Qwen session."""
+    try:
+        from backend.adapters.qwen_direct_adapter import SESSION_FILE
+        if SESSION_FILE.exists():
+            SESSION_FILE.unlink()
+        return {"success": True}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
 
 
 def _sse(data: dict) -> str:

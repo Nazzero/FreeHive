@@ -19,6 +19,7 @@ class SessionManager:
       "claude"           → ClaudeDirectAdapter
       "chatgpt"          → ChatGPTDirectAdapter (with codex subprocess fallback)
       "gemini"           → GeminiDirectAdapter
+      "qwen"             → QwenDirectAdapter (via chat.qwen.ai JWT)
       "arena/<model>"    → ArenaPlaywrightAdapter  (shared instance via ArenaManager, when enabled)
     """
 
@@ -110,6 +111,8 @@ class SessionManager:
             )
         elif m == "gemini" or m.startswith("gemini-"):
             response = await adapter.send_message(message)
+        elif m == "qwen" or m.startswith("qwen"):
+            response = await adapter.send_message(message)
         else:
             raise ValueError(f"Unknown model: {model}")
 
@@ -180,6 +183,7 @@ class SessionManager:
             build_claude_cascade,
             build_chatgpt_cascade,
             build_gemini_cascade,
+            build_qwen_cascade,
         )
 
         m = model.lower()
@@ -210,6 +214,9 @@ class SessionManager:
 
         elif m == "gemini" or m.startswith("gemini-"):
             return build_gemini_cascade(model=None if m == "gemini" else model)
+
+        elif m == "qwen" or m.startswith("qwen"):
+            return build_qwen_cascade(model=None if m == "qwen" else model)
 
         else:
             raise ValueError(f"Unknown model: '{model}'")

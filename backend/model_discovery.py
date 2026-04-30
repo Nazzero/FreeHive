@@ -528,6 +528,39 @@ async def _discover_arena_models() -> dict:
     return result
 
 
+async def discover_qwen_models() -> dict:
+    """Discover Qwen models from chat.qwen.ai public API (no auth needed)."""
+    result = {"provider": "qwen", "tier": "free", "models": [], "error": None}
+    try:
+        from backend.adapters.qwen_direct_adapter import QwenDirectAdapter
+        models = await QwenDirectAdapter.fetch_models()
+        if models:
+            result["models"] = [
+                {
+                    "id": m["id"],
+                    "display_name": m["display_name"],
+                    "note": "thinking" if m.get("thinking") else "",
+                }
+                for m in models
+            ]
+            logger.info("[ModelDiscovery] Qwen: found %d models", len(models))
+        else:
+            result["models"] = _qwen_fallback_models()
+            result["error"] = "Could not fetch models from chat.qwen.ai"
+    except Exception as exc:
+        result["error"] = str(exc)
+        result["models"] = _qwen_fallback_models()
+    return result
+
+
+def _qwen_fallback_models() -> list[dict]:
+    return [
+        {"id": "qwen3.6-plus", "display_name": "Qwen3.6-Plus", "note": "most capable"},
+        {"id": "qwen3.6-max-preview", "display_name": "Qwen3.6-Max Preview", "note": "preview"},
+        {"id": "qwen3.6-27b", "display_name": "Qwen3.6-27B", "note": "open-source"},
+    ]
+
+
 async def discover_all_models() -> dict:
     """
     Run discovery for all authenticated providers.
@@ -540,6 +573,7 @@ async def discover_all_models() -> dict:
         discover_claude_models(),
         discover_chatgpt_models(),
         discover_gemini_models(),
+        discover_qwen_models(),
         _discover_arena_models(),
         return_exceptions=True,
     )

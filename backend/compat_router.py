@@ -45,6 +45,7 @@ compat_router = APIRouter()
 #   freehive-claude    →  ClaudeDirectAdapter   (model prefix: claude-*)
 #   freehive-chatgpt   →  ChatGPTDirectAdapter  (model prefix: gpt-*, o4-*, etc.)
 #   freehive-gemini    →  GeminiDirectAdapter   (model prefix: gemini-*)
+#   freehive-qwen      →  QwenDirectAdapter     (model prefix: qwen*)
 #
 # The model name in the request body overrides the provider default.
 # If no key matches a provider, routing falls back to the model name prefix.
@@ -55,6 +56,7 @@ _KEY_PROVIDER = {
     "freehive-claude":  "claude",
     "freehive-chatgpt": "chatgpt",
     "freehive-gemini":  "gemini",
+    "freehive-qwen":    "qwen",
     "freehive-arena":   "arena",
 }
 

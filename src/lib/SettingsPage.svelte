@@ -229,6 +229,7 @@
         claude:  { name: 'Claude',  color: '#cc785c', logo: '/logos/claude.png' },
         chatgpt: { name: 'ChatGPT', color: '#19c37d', logo: '/logos/chatgpt.png' },
         gemini:  { name: 'Gemini',  color: '#4285f4', logo: '/logos/gemini.png' },
+        qwen:    { name: 'Qwen',    color: '#6366f1', logo: '/logos/qwen.png' },
         arena:   { name: 'Arena.ai', color: '#f97316', logo: '/logos/arena_header.png' },
     };
 

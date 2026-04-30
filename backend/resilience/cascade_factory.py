@@ -151,3 +151,30 @@ def build_gemini_cascade(model: str | None = None) -> AdapterCascade:
     cascade = AdapterCascade("gemini", strategies)
     health_monitor.mark_healthy("gemini", strategies[0].name)
     return cascade
+
+
+def build_qwen_cascade(model: str | None = None) -> AdapterCascade:
+    """
+    Build Qwen adapter cascade:
+      1. Direct chat.qwen.ai API (JWT from browser login)
+    """
+    strategies = []
+
+    try:
+        from backend.adapters.qwen_direct_adapter import QwenDirectAdapter
+        adapter = QwenDirectAdapter(model=model)
+        if adapter.is_authenticated():
+            strategies.append(
+                AdapterStrategy("direct_web", adapter, priority=0)
+            )
+    except Exception as exc:
+        logger.debug("[cascade_factory] Qwen direct adapter unavailable: %s", exc)
+
+    if not strategies:
+        raise RuntimeError(
+            "No Qwen adapters available. Log in to chat.qwen.ai via Settings > Accounts."
+        )
+
+    cascade = AdapterCascade("qwen", strategies)
+    health_monitor.mark_healthy("qwen", strategies[0].name)
+    return cascade
