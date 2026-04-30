@@ -222,10 +222,21 @@ class BackendConn:
     created_at: float
 
 
+MIN_EXTENSION_VERSION = "1.0.1"
+
+
+def _version_tuple(v: str) -> tuple[int, ...]:
+    try:
+        return tuple(int(x) for x in v.split("."))
+    except (ValueError, AttributeError):
+        return (0,)
+
+
 state_lock = threading.Lock()
 jobs_to_backend: dict[str, BackendConn] = {}
 native_write_lock = threading.Lock()
 extension_connected = False
+extension_version: str | None = None
 shutdown_flag = False
 
 
@@ -253,10 +264,14 @@ def send_native_message(payload: dict[str, Any]) -> None:
         sys.stdout.buffer.flush()
 
 
-def set_extension_connected(value: bool) -> None:
-    global extension_connected
+def set_extension_connected(value: bool, version: str | None = None) -> None:
+    global extension_connected, extension_version
     with state_lock:
         extension_connected = value
+        if version is not None:
+            extension_version = version
+        if not value:
+            extension_version = None
 
 
 def is_extension_connected() -> bool:
@@ -530,8 +545,16 @@ def main() -> None:
 
             msg_type = str(msg.get("type", "")).strip().lower()
             if msg_type == BridgeMessageType.HELLO.value:
-                set_extension_connected(True)
-                logger.info("Extension connected")
+                ext_ver = msg.get("extension_version", "unknown")
+                proto_ver = msg.get("protocol_version", "unknown")
+                set_extension_connected(True, version=ext_ver)
+                logger.info("Extension connected (v%s, protocol %s)", ext_ver, proto_ver)
+                if ext_ver != "unknown" and _version_tuple(ext_ver) < _version_tuple(MIN_EXTENSION_VERSION):
+                    logger.warning(
+                        "Extension v%s is outdated (minimum: v%s). "
+                        "Update from Chrome Web Store for best results.",
+                        ext_ver, MIN_EXTENSION_VERSION,
+                    )
                 continue
             if msg_type == BridgeMessageType.PONG.value:
                 continue

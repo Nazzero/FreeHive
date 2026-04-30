@@ -717,7 +717,7 @@
                             </button>
                             <button class="install-tab {installMode === 'webstore' ? 'active' : ''}" on:click={() => installMode = 'webstore'}>
                                 Chrome Web Store
-                                <span class="tab-version">v1.0.0</span>
+                                <span class="tab-version">v1.0.1</span>
                             </button>
                         </div>
 

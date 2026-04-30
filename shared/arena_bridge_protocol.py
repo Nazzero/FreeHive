@@ -10,6 +10,7 @@ from enum import Enum
 from typing import Any, Mapping
 
 PROTOCOL_VERSION = "2026-04-08.v1"
+MIN_EXTENSION_VERSION = "1.0.1"
 NATIVE_HOST_NAME = "com.freehive.arena_bridge"
 DEFAULT_BRIDGE_HTTP_URL = "http://127.0.0.1:8765"
 DEFAULT_JOB_TIMEOUT_MS = 120_000

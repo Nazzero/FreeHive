@@ -5,6 +5,9 @@ const EVENT_FORWARD_TYPE = "arena_bridge_event";
 
 let nativePort = null;
 let reconnectTimer = null;
+let reconnectAttempts = 0;
+const RECONNECT_BASE_MS = 1500;
+const RECONNECT_MAX_MS = 30000;
 
 function log(...args) {
   console.log("[FreeHiveBridge]", ...args);
@@ -21,10 +24,13 @@ function scheduleReconnect() {
   if (reconnectTimer) {
     return;
   }
+  const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, reconnectAttempts), RECONNECT_MAX_MS);
+  reconnectAttempts++;
+  log("reconnecting in", delay, "ms (attempt", reconnectAttempts + ")");
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     connectNativeHost();
-  }, 1500);
+  }, delay);
 }
 
 function connectNativeHost() {
@@ -40,6 +46,7 @@ function connectNativeHost() {
     return;
   }
 
+  reconnectAttempts = 0;
   nativePort.onMessage.addListener(onNativeMessage);
   nativePort.onDisconnect.addListener(() => {
     const error = chrome.runtime.lastError ? chrome.runtime.lastError.message : "";
