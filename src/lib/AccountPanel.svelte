@@ -515,47 +515,48 @@
             {/each}
 
             <!-- Qwen — browser-based login (separate from CLI providers) -->
-            {@const qwenStatus = status?.qwen || {}}
-            <div class="provider-card {qwenStatus.authenticated ? 'connected' : ''}">
-                <div class="provider-icon">
-                    <img src="/logos/qwen.png" alt="Qwen logo" />
-                </div>
-                <div class="provider-main">
-                    <div class="provider-title">
-                        <h3>Qwen</h3>
-                        <span class="badge {qwenStatus.authenticated ? 'active' : 'inactive'}">
-                            {qwenStatus.authenticated ? 'Active' : 'Disconnected'}
-                        </span>
+            {#if status}
+                {@const qwenStatus = status?.qwen || {}}
+                <div class="provider-card {qwenStatus.authenticated ? 'connected' : ''}">
+                    <div class="provider-icon">
+                        <img src="/logos/qwen.png" alt="Qwen logo" />
                     </div>
-                    <p class="provider-detail">
-                        {#if qwenStatus.authenticated}
-                            Connected{qwenStatus.account_label ? ` as ${qwenStatus.account_label}` : ''} via chat.qwen.ai
-                        {:else}
-                            Login via Google or GitHub on chat.qwen.ai (free)
-                        {/if}
-                    </p>
+                    <div class="provider-main">
+                        <div class="provider-title">
+                            <h3>Qwen</h3>
+                            <span class="badge {qwenStatus.authenticated ? 'active' : 'inactive'}">
+                                {qwenStatus.authenticated ? 'Active' : 'Disconnected'}
+                            </span>
+                        </div>
+                        <p class="provider-detail">
+                            {#if qwenStatus.authenticated}
+                                Connected{qwenStatus.account_label ? ` as ${qwenStatus.account_label}` : ''} via chat.qwen.ai
+                            {:else}
+                                Login via Google or GitHub on chat.qwen.ai (free)
+                            {/if}
+                        </p>
+                    </div>
+
+                    {#if qwenStatus.authenticated}
+                        <button
+                            class="action-btn danger"
+                            on:click={handleQwenLogout}
+                            disabled={busyLogoutTool === 'qwen'}
+                        >
+                            {busyLogoutTool === 'qwen' ? 'Logging out...' : 'Logout'}
+                        </button>
+                    {:else}
+                        <button
+                            class="action-btn"
+                            on:click={handleQwenLogin}
+                            disabled={qwenLoggingIn}
+                        >
+                            {qwenLoggingIn ? 'Waiting for login...' : 'Login to Qwen'}
+                        </button>
+                    {/if}
                 </div>
 
-                {#if qwenStatus.authenticated}
-                    <button
-                        class="action-btn danger"
-                        on:click={handleQwenLogout}
-                        disabled={busyLogoutTool === 'qwen'}
-                    >
-                        {busyLogoutTool === 'qwen' ? 'Logging out...' : 'Logout'}
-                    </button>
-                {:else}
-                    <button
-                        class="action-btn"
-                        on:click={handleQwenLogin}
-                        disabled={qwenLoggingIn}
-                    >
-                        {qwenLoggingIn ? 'Waiting for login...' : 'Login to Qwen'}
-                    </button>
-                {/if}
-            </div>
-
-            {#if !qwenStatus.authenticated}
+                {#if !qwenStatus.authenticated}
                 <div class="qwen-manual-token">
                     <p class="hint">Or paste your chat.qwen.ai JWT token manually:</p>
                     <div class="token-input-row">
@@ -570,6 +571,7 @@
                         </button>
                     </div>
                 </div>
+                {/if}
             {/if}
         </div>
 
